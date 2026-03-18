@@ -8,7 +8,6 @@ export type EventCursorRecord = {
   eventId: string;
   requestId: string;
   eventType: string;
-  createdAt: string;
   expiresAt: string;
 };
 
@@ -24,7 +23,7 @@ export type AppendEventCursorRecordInput = {
 export type ReadEventCursorRecordsInput = {
   deviceId: string;
   hostId: string;
-  afterCursor?: string;
+  afterCursor: string;
 };
 
 type EventCursorRow = {
@@ -34,7 +33,6 @@ type EventCursorRow = {
   event_id: string;
   request_id: string;
   event_type: string;
-  created_at: string;
   expires_at: string;
 };
 
@@ -45,9 +43,8 @@ export function appendEventCursorRecord(
 ) {
   pruneExpiredEventCursorRecords(database, clock);
 
-  const createdAt = toTimestamp(clock);
   const expiresAt = new Date(
-    Date.parse(createdAt) + RELAY_CURSOR_TTL_MS,
+    clock().getTime() + RELAY_CURSOR_TTL_MS,
   ).toISOString();
 
   database
@@ -60,7 +57,6 @@ export function appendEventCursorRecord(
           event_id,
           request_id,
           event_type,
-          created_at,
           expires_at
         )
         VALUES (
@@ -70,14 +66,12 @@ export function appendEventCursorRecord(
           @eventId,
           @requestId,
           @eventType,
-          @createdAt,
           @expiresAt
         )
         ON CONFLICT(device_id, host_id, cursor) DO UPDATE SET
           event_id = excluded.event_id,
           request_id = excluded.request_id,
           event_type = excluded.event_type,
-          created_at = excluded.created_at,
           expires_at = excluded.expires_at
       `,
     )
@@ -88,7 +82,6 @@ export function appendEventCursorRecord(
       eventId: input.eventId,
       requestId: input.requestId,
       eventType: input.eventType,
-      createdAt,
       expiresAt,
     });
 
@@ -107,51 +100,22 @@ export function readEventCursorRecords(
 ) {
   pruneExpiredEventCursorRecords(database, clock);
 
-  if (input.afterCursor) {
-    const anchorRowId = getEventCursorRowId(
-      database,
-      input.deviceId,
-      input.hostId,
-      input.afterCursor,
-    );
+  const anchorRowId = getEventCursorRowId(
+    database,
+    input.deviceId,
+    input.hostId,
+    input.afterCursor,
+  );
 
-    if (anchorRowId === null) {
-      return [];
-    }
-
-    const rows = database
-      .prepare<
-        { deviceId: string; hostId: string; anchorRowId: number },
-        EventCursorRow
-      >(
-        `
-          SELECT
-            device_id,
-            host_id,
-            cursor,
-            event_id,
-            request_id,
-            event_type,
-            created_at,
-            expires_at
-          FROM event_cursors
-          WHERE device_id = @deviceId
-            AND host_id = @hostId
-            AND rowid > @anchorRowId
-          ORDER BY rowid ASC
-        `,
-      )
-      .all({
-        deviceId: input.deviceId,
-        hostId: input.hostId,
-        anchorRowId,
-      });
-
-    return rows.map(mapEventCursorRow);
+  if (anchorRowId === null) {
+    return [];
   }
 
   const rows = database
-    .prepare<{ deviceId: string; hostId: string }, EventCursorRow>(
+    .prepare<
+      { deviceId: string; hostId: string; anchorRowId: number },
+      EventCursorRow
+    >(
       `
         SELECT
           device_id,
@@ -160,17 +124,18 @@ export function readEventCursorRecords(
           event_id,
           request_id,
           event_type,
-          created_at,
           expires_at
         FROM event_cursors
         WHERE device_id = @deviceId
           AND host_id = @hostId
+          AND rowid > @anchorRowId
         ORDER BY rowid ASC
       `,
     )
     .all({
       deviceId: input.deviceId,
       hostId: input.hostId,
+      anchorRowId,
     });
 
   return rows.map(mapEventCursorRow);
@@ -208,7 +173,6 @@ function getEventCursorRecord(
           event_id,
           request_id,
           event_type,
-          created_at,
           expires_at
         FROM event_cursors
         WHERE device_id = @deviceId
@@ -261,7 +225,6 @@ function mapEventCursorRow(row: EventCursorRow): EventCursorRecord {
     eventId: row.event_id,
     requestId: row.request_id,
     eventType: row.event_type,
-    createdAt: row.created_at,
     expiresAt: row.expires_at,
   };
 }

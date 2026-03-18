@@ -36,6 +36,7 @@ export function initializeRelaySchema(database: RelayStoreDatabase) {
     CREATE TABLE IF NOT EXISTS devices (
       device_id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
+      credential_hash TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
@@ -79,7 +80,6 @@ export function initializeRelaySchema(database: RelayStoreDatabase) {
       event_id TEXT NOT NULL,
       request_id TEXT NOT NULL,
       event_type TEXT NOT NULL,
-      created_at TEXT NOT NULL,
       expires_at TEXT NOT NULL,
       PRIMARY KEY (device_id, host_id, cursor),
       FOREIGN KEY (device_id, host_id)
@@ -97,6 +97,8 @@ export function initializeRelaySchema(database: RelayStoreDatabase) {
       FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE
     );
   `);
+
+  ensureColumn(database, "devices", "credential_hash", "TEXT NOT NULL DEFAULT ''");
 }
 
 export function listRelayTableNames(database: RelayStoreDatabase): RelayTableName[] {
@@ -137,4 +139,30 @@ export function ensureUser(
       userId,
       timestamp,
     });
+}
+
+function ensureColumn(
+  database: RelayStoreDatabase,
+  tableName: string,
+  columnName: string,
+  definition: string,
+) {
+  const columns = database
+    .prepare<{ tableName: string }, { name: string }>(
+      `
+        SELECT name
+        FROM pragma_table_info(@tableName)
+      `,
+    )
+    .all({
+      tableName,
+    });
+
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+
+  database.exec(
+    `ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`,
+  );
 }

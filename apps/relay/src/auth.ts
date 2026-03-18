@@ -44,14 +44,6 @@ export const createRelayAuth = (input: CreateRelayAuthInput): RelayAuth => {
 
   return {
     bootstrap(payload) {
-      const credential = payload.deviceCredential.trim();
-      if (credential.length === 0) {
-        return {
-          ok: false,
-          reason: "invalid_device_credential",
-        };
-      }
-
       const paired = input
         .store
         .listDeviceHostBindings(payload.deviceId)
@@ -60,6 +52,26 @@ export const createRelayAuth = (input: CreateRelayAuthInput): RelayAuth => {
         return {
           ok: false,
           reason: "device_host_not_paired",
+        };
+      }
+
+      const authenticated =
+        input.store.verifyDeviceCredential({
+          deviceId: payload.deviceId,
+          deviceCredential: payload.deviceCredential,
+        }) ||
+        input.store.adoptLegacyDeviceCredential({
+          deviceId: payload.deviceId,
+          deviceCredential: payload.deviceCredential,
+        }) ||
+        input.store.verifyDeviceCredential({
+          deviceId: payload.deviceId,
+          deviceCredential: payload.deviceCredential,
+        });
+      if (!authenticated) {
+        return {
+          ok: false,
+          reason: "invalid_device_credential",
         };
       }
 

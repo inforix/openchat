@@ -1,7 +1,4 @@
-import type {
-  EventCursorRecord,
-  RelayStore,
-} from "../../../packages/store/src/index";
+import type { RelayStore } from "../../../packages/store/src/index";
 
 import { createRelayAuth } from "./auth";
 import { createRelayEventBuffer } from "./buffer";
@@ -15,15 +12,8 @@ export type CreateRelayMainInput = {
 };
 
 export type RelayMain = {
-  store: RelayStore;
   http: RelayHttpService;
   ws: RelayWsService;
-  inspectReplayMetadata(input: {
-    deviceId: string;
-    hostId: string;
-    afterCursor?: string;
-  }): EventCursorRecord[];
-  listRelayTableNames(): string[];
   close(): void;
 };
 
@@ -50,15 +40,8 @@ export const createRelayMain = (input: CreateRelayMainInput): RelayMain => {
   });
 
   return {
-    store: input.store,
     http,
     ws,
-    inspectReplayMetadata(payload) {
-      return buffer.readMetadata(payload);
-    },
-    listRelayTableNames() {
-      return input.store.listTableNames();
-    },
     close() {
       input.store.close();
     },

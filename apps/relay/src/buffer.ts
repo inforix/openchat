@@ -1,6 +1,5 @@
 import {
   RELAY_CURSOR_TTL_MS,
-  type EventCursorRecord,
   type RelayStore,
 } from "../../../packages/store/src/index";
 
@@ -33,11 +32,6 @@ type ReplayRelayEventInput = {
 export type RelayEventBuffer = {
   append(input: AppendRelayEventInput): RelayBufferedEvent;
   replay(input: ReplayRelayEventInput): RelayBufferedEvent[];
-  readMetadata(input: {
-    deviceId: string;
-    hostId: string;
-    afterCursor?: string;
-  }): EventCursorRecord[];
 };
 
 type CreateRelayEventBufferInput = {
@@ -118,11 +112,6 @@ export const createRelayEventBuffer = (
       }
 
       return replayed;
-    },
-
-    readMetadata(payload) {
-      pruneExpired();
-      return input.store.readEventCursorRecords(payload);
     },
   };
 };

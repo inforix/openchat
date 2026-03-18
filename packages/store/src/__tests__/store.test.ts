@@ -4,6 +4,11 @@ import {
   RELAY_TABLE_NAMES,
   createRelayStore,
 } from "../index";
+import {
+  adoptLegacyDeviceCredential,
+  verifyDeviceCredential,
+} from "../devices";
+import { ensureUser, openRelayDatabase } from "../schema";
 
 function createTestStore(initialNow = "2026-03-18T00:00:00.000Z") {
   let currentNow = Date.parse(initialNow);
@@ -21,6 +26,22 @@ function createTestStore(initialNow = "2026-03-18T00:00:00.000Z") {
 }
 
 describe("relay metadata store", () => {
+  it("rejects blank device credentials at registration", () => {
+    const { store } = createTestStore();
+
+    try {
+      expect(() =>
+        store.registerDevice({
+          deviceId: "device-1",
+          userId: "user-1",
+          deviceCredential: "   ",
+        }),
+      ).toThrow(/credential/i);
+    } finally {
+      store.close();
+    }
+  });
+
   it("registers a device", () => {
     const { store } = createTestStore();
 
@@ -28,6 +49,7 @@ describe("relay metadata store", () => {
       const device = store.registerDevice({
         deviceId: "device-1",
         userId: "user-1",
+        deviceCredential: "credential-1",
       });
 
       expect(device).toMatchObject({
@@ -40,8 +62,74 @@ describe("relay metadata store", () => {
         deviceId: "device-1",
         userId: "user-1",
       });
+      expect(
+        store.verifyDeviceCredential({
+          deviceId: "device-1",
+          deviceCredential: "credential-1",
+        }),
+      ).toBe(true);
+      expect(
+        store.verifyDeviceCredential({
+          deviceId: "device-1",
+          deviceCredential: "wrong-credential",
+        }),
+      ).toBe(false);
     } finally {
       store.close();
+    }
+  });
+
+  it("adopts a credential for legacy device rows that predate credential hashes", () => {
+    const database = openRelayDatabase(":memory:");
+
+    try {
+      ensureUser(database, "user-1", "2026-03-18T00:00:00.000Z");
+      database
+        .prepare(
+          `
+            INSERT INTO devices (
+              device_id,
+              user_id,
+              credential_hash,
+              created_at,
+              updated_at
+            )
+            VALUES (
+              @deviceId,
+              @userId,
+              '',
+              @createdAt,
+              @updatedAt
+            )
+          `,
+        )
+        .run({
+          deviceId: "device-legacy",
+          userId: "user-1",
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        });
+
+      expect(
+        adoptLegacyDeviceCredential(database, {
+          deviceId: "device-legacy",
+          deviceCredential: "credential-1",
+        }),
+      ).toBe(true);
+      expect(
+        verifyDeviceCredential(database, {
+          deviceId: "device-legacy",
+          deviceCredential: "credential-1",
+        }),
+      ).toBe(true);
+      expect(
+        verifyDeviceCredential(database, {
+          deviceId: "device-legacy",
+          deviceCredential: "wrong-credential",
+        }),
+      ).toBe(false);
+    } finally {
+      database.close();
     }
   });
 
@@ -52,6 +140,7 @@ describe("relay metadata store", () => {
       store.registerDevice({
         deviceId: "device-1",
         userId: "user-1",
+        deviceCredential: "credential-1",
       });
       store.registerHost({
         hostId: "host-1",
@@ -85,6 +174,7 @@ describe("relay metadata store", () => {
       store.registerDevice({
         deviceId: "device-1",
         userId: "user-1",
+        deviceCredential: "credential-1",
       });
       store.registerHost({
         hostId: "host-1",
@@ -125,6 +215,7 @@ describe("relay metadata store", () => {
       store.registerDevice({
         deviceId: "device-1",
         userId: "user-1",
+        deviceCredential: "credential-1",
       });
       store.registerHost({
         hostId: "host-1",
@@ -176,6 +267,7 @@ describe("relay metadata store", () => {
         store.readEventCursorRecords({
           deviceId: "device-1",
           hostId: "host-1",
+          afterCursor: "cursor-1",
         }),
       ).toEqual([]);
     } finally {
@@ -190,6 +282,7 @@ describe("relay metadata store", () => {
       store.registerDevice({
         deviceId: "device-1",
         userId: "user-1",
+        deviceCredential: "credential-1",
       });
       store.registerHost({
         hostId: "host-1",
@@ -198,6 +291,15 @@ describe("relay metadata store", () => {
       store.bindDeviceToHost({
         deviceId: "device-1",
         hostId: "host-1",
+      });
+
+      store.appendEventCursorRecord({
+        deviceId: "device-1",
+        hostId: "host-1",
+        cursor: "cursor-0",
+        eventId: "event-0",
+        requestId: "request-0",
+        eventType: "edge.hello",
       });
 
       store.appendEventCursorRecord({
@@ -214,6 +316,7 @@ describe("relay metadata store", () => {
         store.readEventCursorRecords({
           deviceId: "device-1",
           hostId: "host-1",
+          afterCursor: "cursor-0",
         }),
       ).toEqual([
         {
@@ -223,7 +326,6 @@ describe("relay metadata store", () => {
           eventId: "event-1",
           requestId: "request-1",
           eventType: "edge.stream.event",
-          createdAt: "2026-03-18T00:00:00.000Z",
           expiresAt: new Date(
             Date.parse("2026-03-18T00:00:00.000Z") + RELAY_CURSOR_TTL_MS,
           ).toISOString(),
@@ -241,6 +343,7 @@ describe("relay metadata store", () => {
       store.registerDevice({
         deviceId: "device-1",
         userId: "user-1",
+        deviceCredential: "credential-1",
       });
       store.registerHost({
         hostId: "host-1",
