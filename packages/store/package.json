@@ -11,8 +11,15 @@
   "scripts": {
     "dev": "echo \"No dev task yet\"",
     "build": "echo \"No build yet\"",
-    "test": "echo \"No tests yet\"",
+    "vitest": "vitest",
+    "test": "vitest run",
     "lint": "tsc --project tsconfig.json --noEmit",
     "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
   }
 }
