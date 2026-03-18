@@ -73,6 +73,9 @@ type CreateEdgeMain = (input: {
     }): Promise<void>;
   };
   openClaw: EdgeOpenClawAdapter;
+  streamState?: {
+    hasActiveStream(input: { accountId: string }): Promise<boolean>;
+  };
   now?: () => Date;
   generatePairingNonce?: () => string;
 }) => EdgeMain;
@@ -88,7 +91,6 @@ type EdgeOpenClawAdapter = Pick<
   | "abortMessage"
 > & {
   confirmAccountCreated(input: CreateOpenChatBotInput): Promise<boolean>;
-  hasActiveStream(input: { accountId: string }): Promise<boolean>;
 };
 
 const OPENCHAT_ACCOUNTS_CONFIG_PATH = "channels.openchat.accounts";
@@ -111,6 +113,22 @@ class FakeRelay {
     edgeKeyFingerprint: string;
   }): Promise<void> {
     this.registerCalls.push(input);
+  }
+}
+
+class FakeStreamStateSource {
+  private activeStreams = new Set<string>();
+
+  setActive(accountId: string, active: boolean): void {
+    if (active) {
+      this.activeStreams.add(accountId);
+      return;
+    }
+    this.activeStreams.delete(accountId);
+  }
+
+  async hasActiveStream(input: { accountId: string }): Promise<boolean> {
+    return this.activeStreams.has(input.accountId);
   }
 }
 
@@ -182,7 +200,6 @@ class ConfirmingOpenClawAdapter implements EdgeOpenClawAdapter {
   readonly createRequests: CreateOpenChatBotInput[] = [];
   readonly confirmRequests: CreateOpenChatBotInput[] = [];
   private readonly confirmations = new Map<string, boolean>();
-  private activeStreams = new Set<string>();
   streamConflictShape: { code: "session_conflict"; activeSessionId: string | null } | null =
     null;
 
@@ -190,14 +207,6 @@ class ConfirmingOpenClawAdapter implements EdgeOpenClawAdapter {
 
   setAccountConfirmation(accountId: string, confirmed: boolean): void {
     this.confirmations.set(accountId, confirmed);
-  }
-
-  setStreamActive(accountId: string, active: boolean): void {
-    if (active) {
-      this.activeStreams.add(accountId);
-      return;
-    }
-    this.activeStreams.delete(accountId);
   }
 
   async confirmAccountCreated(
@@ -244,10 +253,6 @@ class ConfirmingOpenClawAdapter implements EdgeOpenClawAdapter {
     targetSessionId: string;
   }): Promise<void> {
     return this.client.abortMessage(input);
-  }
-
-  async hasActiveStream(input: { accountId: string }): Promise<boolean> {
-    return this.activeStreams.has(input.accountId);
   }
 }
 
@@ -568,6 +573,7 @@ describe("edge services", () => {
     const createEdgeMain = await loadCreateEdgeMain();
     const relay = new FakeRelay();
     const transport = new FakeOpenClawTransport();
+    const streamState = new FakeStreamStateSource();
     const { adapter, stateDir } = await createOpenClawAdapter({ transport });
     const edge = createEdgeMain({
       hostId: "host-1",
@@ -575,12 +581,13 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: adapter,
+      streamState,
     });
     const bot = await edge.createBot({
       accountId: "acct-1",
       agentId: "agent-1",
     });
-    adapter.setStreamActive("acct-1", true);
+    streamState.setActive("acct-1", true);
     transport.holdNextSendOpen();
 
     const sendPromise = edge.handleMessage({
@@ -611,7 +618,7 @@ describe("edge services", () => {
       activeSessionId: bot.activeSessionId,
     });
 
-    adapter.setStreamActive("acct-1", false);
+    streamState.setActive("acct-1", false);
     transport.releasePendingSend();
     await expect(sendPromise).resolves.toEqual({
       ok: true,
@@ -623,6 +630,7 @@ describe("edge services", () => {
   it("returns session_busy based on explicit adapter stream state even after send resolves", async () => {
     const createEdgeMain = await loadCreateEdgeMain();
     const relay = new FakeRelay();
+    const streamState = new FakeStreamStateSource();
     const { adapter, stateDir } = await createOpenClawAdapter();
     const edge = createEdgeMain({
       hostId: "host-1",
@@ -630,13 +638,14 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: adapter,
+      streamState,
     });
     const bot = await edge.createBot({
       accountId: "acct-1",
       agentId: "agent-1",
     });
 
-    adapter.setStreamActive("acct-1", true);
+    streamState.setActive("acct-1", true);
     await expect(
       edge.handleMessage({
         accountId: "acct-1",
@@ -672,7 +681,7 @@ describe("edge services", () => {
       activeSessionId: bot.activeSessionId,
     });
 
-    adapter.setStreamActive("acct-1", false);
+    streamState.setActive("acct-1", false);
     await expect(
       edge.handleMessage({
         accountId: "acct-1",

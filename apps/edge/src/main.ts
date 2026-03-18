@@ -16,6 +16,7 @@ import {
   createSessionService,
   type SessionOpenClawAdapter,
   type SessionSendResult,
+  type StreamStateSource,
 } from "./session-service";
 
 export type EdgeOpenClawServices = EdgeOpenClawAdapter & SessionOpenClawAdapter;
@@ -23,6 +24,7 @@ export type EdgeOpenClawServices = EdgeOpenClawAdapter & SessionOpenClawAdapter;
 export type CreateEdgeMainInput = EdgeConfigInput & {
   relay: RelayClient;
   openClaw: EdgeOpenClawServices;
+  streamState?: StreamStateSource;
 };
 
 export type EdgeMain = {
@@ -49,6 +51,12 @@ type EdgeRuntime = {
   sessionService: ReturnType<typeof createSessionService>;
 };
 
+const idleStreamStateSource: StreamStateSource = {
+  async hasActiveStream(): Promise<boolean> {
+    return false;
+  },
+};
+
 const createRuntime = async (
   input: CreateEdgeMainInput,
 ): Promise<EdgeRuntime> => {
@@ -57,7 +65,10 @@ const createRuntime = async (
     relayTunnel: createRelayTunnel(config, input.relay),
     pairingService: createPairingService(config),
     botService: createBotService(input.openClaw),
-    sessionService: createSessionService(input.openClaw),
+    sessionService: createSessionService(
+      input.openClaw,
+      input.streamState ?? idleStreamStateSource,
+    ),
   };
 };
 

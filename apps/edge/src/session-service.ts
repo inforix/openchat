@@ -39,6 +39,9 @@ export type SessionOpenClawAdapter = {
     accountId: string;
     targetSessionId: string;
   }): Promise<void>;
+};
+
+export type StreamStateSource = {
   hasActiveStream(input: { accountId: string }): Promise<boolean>;
 };
 
@@ -95,6 +98,7 @@ const toConflictResult = (
 
 export const createSessionService = (
   openClaw: SessionOpenClawAdapter,
+  streamState: StreamStateSource,
 ): SessionService => {
   const mutationLocks = new Map<string, Promise<void>>();
 
@@ -107,7 +111,7 @@ export const createSessionService = (
         payload.command.type === "session.new"
       ) {
         return withMutex(mutationLocks, input.accountId, async () => {
-          if (await openClaw.hasActiveStream({ accountId: input.accountId })) {
+          if (await streamState.hasActiveStream({ accountId: input.accountId })) {
             const activeSession = await openClaw.getActiveSession({
               accountId: input.accountId,
             });
