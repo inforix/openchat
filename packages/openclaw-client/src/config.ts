@@ -41,21 +41,16 @@ export const listConfiguredOpenChatAccounts = async (
   return value.map((account) => ({ ...account }));
 };
 
-export const upsertConfiguredOpenChatAccount = async (
+export const writeConfiguredOpenChatAccounts = async (
   transport: OpenClawTransport,
-  account: ConfiguredOpenChatAccount,
+  accounts: ConfiguredOpenChatAccount[],
 ): Promise<ConfiguredOpenChatAccount[]> => {
-  const accounts = await listConfiguredOpenChatAccounts(transport);
-  const existingIndex = accounts.findIndex(
-    (candidate) => candidate.accountId === account.accountId,
-  );
-
-  if (existingIndex >= 0) {
-    accounts[existingIndex] = account;
+  const clonedAccounts = accounts.map((account) => ({ ...account }));
+  if (clonedAccounts.length === 0) {
+    await transport.configUnset(OPENCHAT_ACCOUNTS_CONFIG_PATH);
   } else {
-    accounts.push(account);
+    await transport.configSet(OPENCHAT_ACCOUNTS_CONFIG_PATH, clonedAccounts);
   }
 
-  await transport.configSet(OPENCHAT_ACCOUNTS_CONFIG_PATH, accounts);
-  return accounts;
+  return clonedAccounts;
 };

@@ -10,7 +10,7 @@ import {
 } from "./account-state";
 import {
   listConfiguredOpenChatAccounts,
-  upsertConfiguredOpenChatAccount,
+  writeConfiguredOpenChatAccounts,
   type ConfiguredOpenChatAccount,
 } from "./config";
 import { OpenClawClientError, SessionConflictError } from "./errors";
@@ -219,28 +219,41 @@ export const createOpenClawClient = (
         );
       }
 
-      await upsertConfiguredOpenChatAccount(options.transport, {
-        accountId,
-        agentId,
-      });
-      await options.transport.agentsBind({
-        agentId,
-        binding: `openchat:${accountId}`,
-      });
-
-      const initialSessionId = await createTransportSession(
+      const nextConfiguredAccounts = [
+        ...configuredAccounts,
+        { accountId, agentId },
+      ];
+      await writeConfiguredOpenChatAccounts(
         options.transport,
-        accountId,
+        nextConfiguredAccounts,
       );
-      await writeAccountState({
-        hostId: options.hostId,
-        accountId,
-        activeSessionId: initialSessionId,
-        archivedSessions: [],
-        commandResults: [],
-      });
 
-      return toBot(options.hostId, { accountId, agentId }, initialSessionId);
+      try {
+        await options.transport.agentsBind({
+          agentId,
+          binding: `openchat:${accountId}`,
+        });
+
+        const initialSessionId = await createTransportSession(
+          options.transport,
+          accountId,
+        );
+        await writeAccountState({
+          hostId: options.hostId,
+          accountId,
+          activeSessionId: initialSessionId,
+          archivedSessions: [],
+          commandResults: [],
+        });
+
+        return toBot(options.hostId, { accountId, agentId }, initialSessionId);
+      } catch (error) {
+        await writeConfiguredOpenChatAccounts(
+          options.transport,
+          configuredAccounts,
+        );
+        throw error;
+      }
     },
 
     getActiveSession,

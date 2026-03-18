@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -34,6 +34,11 @@ export type StoredAccountState = {
 type AccountStateFile = {
   version: 1;
   accounts: StoredAccountState[];
+};
+
+type AccountStateCandidate = {
+  state: AccountStateFile;
+  mtimeMs: number;
 };
 
 const ACCOUNT_STATE_DIRECTORY = "openchat";
@@ -174,10 +179,18 @@ const writeAtomicFile = async (path: string, content: string): Promise<void> => 
   await syncDirectory(dirname(path));
 };
 
-const readStateCandidate = async (path: string): Promise<AccountStateFile | null> => {
+const readStateCandidate = async (
+  path: string,
+): Promise<AccountStateCandidate | null> => {
   try {
-    const raw = await readFile(path, "utf8");
-    return parseAccountStateFile(raw);
+    const [raw, snapshotStats] = await Promise.all([
+      readFile(path, "utf8"),
+      stat(path),
+    ]);
+    return {
+      state: parseAccountStateFile(raw),
+      mtimeMs: snapshotStats.mtimeMs,
+    };
   } catch (error) {
     const code =
       typeof error === "object" && error !== null && "code" in error
@@ -196,22 +209,46 @@ export const loadAccountStateFile = async (
   stateDir: string,
 ): Promise<AccountStateFile> => {
   const { primaryPath, backupPath } = getStatePaths(stateDir);
+  let primaryCandidate: AccountStateCandidate | null = null;
+  let backupCandidate: AccountStateCandidate | null = null;
+  let primaryError: unknown = null;
+  let backupError: unknown = null;
 
   try {
-    const primary = await readStateCandidate(primaryPath);
-    if (primary !== null) {
-      return primary;
-    }
-  } catch {
-    const backup = await readStateCandidate(backupPath);
-    if (backup !== null) {
-      return backup;
-    }
-    throw new OpenClawClientError("unable to recover account-state.json from backup");
+    primaryCandidate = await readStateCandidate(primaryPath);
+  } catch (error) {
+    primaryError = error;
   }
 
-  const backup = await readStateCandidate(backupPath);
-  return backup ?? {
+  try {
+    backupCandidate = await readStateCandidate(backupPath);
+  } catch (error) {
+    backupError = error;
+  }
+
+  if (primaryCandidate && backupCandidate) {
+    return primaryCandidate.mtimeMs >= backupCandidate.mtimeMs
+      ? primaryCandidate.state
+      : backupCandidate.state;
+  }
+
+  if (backupCandidate) {
+    return backupCandidate.state;
+  }
+
+  if (primaryCandidate) {
+    return primaryCandidate.state;
+  }
+
+  if (primaryError || backupError) {
+    throw (
+      primaryError ??
+      backupError ??
+      new OpenClawClientError("unable to load account-state.json")
+    );
+  }
+
+  return {
     version: 1,
     accounts: [],
   };

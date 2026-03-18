@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -26,9 +26,18 @@ class FakeOpenClawTransport implements OpenClawTransport {
 
   private readonly config = new Map<string, unknown>();
   private nextSessionNumber = 1;
+  failNextBindWith: Error | null = null;
 
   seedOpenChatAccounts(accounts: Array<{ accountId: string; agentId: string }>) {
     this.config.set(OPENCHAT_ACCOUNTS_CONFIG_PATH, structuredClone(accounts));
+  }
+
+  readOpenChatAccounts(): Array<{ accountId: string; agentId: string }> {
+    return structuredClone(
+      (this.config.get(OPENCHAT_ACCOUNTS_CONFIG_PATH) as
+        | Array<{ accountId: string; agentId: string }>
+        | undefined) ?? [],
+    );
   }
 
   async configGet(path: string): Promise<unknown> {
@@ -50,6 +59,11 @@ class FakeOpenClawTransport implements OpenClawTransport {
     agentId: string;
     binding: string;
   }): Promise<void> {
+    if (this.failNextBindWith) {
+      const error = this.failNextBindWith;
+      this.failNextBindWith = null;
+      throw error;
+    }
     this.bindings.push(input);
   }
 
@@ -200,6 +214,39 @@ describe("openclaw host adapter", () => {
     ).rejects.toThrow(/already exists/i);
     expect(transport.bindings).toEqual([
       { agentId: "agent-1", binding: "openchat:acct-1" },
+    ]);
+  });
+
+  it("rolls back config if provisioning fails after config mutation so retry can succeed", async () => {
+    const transport = new FakeOpenClawTransport();
+    transport.seedOpenChatAccounts([{ accountId: "acct-existing", agentId: "agent-existing" }]);
+    transport.failNextBindWith = new Error("bind failed");
+    const stateDir = await createStateDir();
+    const client = createClient({ transport, stateDir });
+
+    await expect(
+      client.createOpenChatBot({
+        accountId: "acct-1",
+        agentId: "agent-1",
+      }),
+    ).rejects.toThrow(/bind failed/i);
+    expect(transport.readOpenChatAccounts()).toEqual([
+      { accountId: "acct-existing", agentId: "agent-existing" },
+    ]);
+
+    const bot = await client.createOpenChatBot({
+      accountId: "acct-1",
+      agentId: "agent-1",
+    });
+
+    expect(bot).toMatchObject({
+      accountId: "acct-1",
+      agentId: "agent-1",
+      activeSessionId: "sess-1",
+    });
+    expect(transport.readOpenChatAccounts()).toEqual([
+      { accountId: "acct-existing", agentId: "agent-existing" },
+      { accountId: "acct-1", agentId: "agent-1" },
     ]);
   });
 
@@ -395,5 +442,89 @@ describe("openclaw host adapter", () => {
       accountId: "acct-1",
       sessionId: bot.activeSessionId,
     });
+  });
+
+  it("prefers a newer backup over an older but parseable primary snapshot", async () => {
+    const transport = new FakeOpenClawTransport();
+    transport.seedOpenChatAccounts([{ accountId: "acct-1", agentId: "agent-1" }]);
+    const stateDir = await createStateDir();
+    const stateDirectory = join(stateDir, "openchat");
+    const statePath = join(stateDirectory, "account-state.json");
+    const backupPath = `${statePath}.bak`;
+    const olderTime = new Date("2026-03-18T10:00:00.000Z");
+    const newerTime = new Date("2026-03-18T10:05:00.000Z");
+
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(
+      statePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          accounts: [
+            {
+              hostId: "host-1",
+              accountId: "acct-1",
+              activeSessionId: "sess-stale",
+              archivedSessions: [],
+              commandResults: [],
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await writeFile(
+      backupPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          accounts: [
+            {
+              hostId: "host-1",
+              accountId: "acct-1",
+              activeSessionId: "sess-fresh",
+              archivedSessions: [],
+              commandResults: [
+                {
+                  deviceId: "device-1",
+                  commandId: "cmd-fresh",
+                  resultingSessionId: "sess-fresh",
+                  createdAt: newerTime.getTime(),
+                },
+              ],
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await utimes(statePath, olderTime, olderTime);
+    await utimes(backupPath, newerTime, newerTime);
+
+    const restartedClient = createClient({ transport, stateDir, now: () => newerTime.getTime() });
+
+    await expect(
+      restartedClient.getActiveSession({ accountId: "acct-1" }),
+    ).resolves.toEqual({
+      hostId: "host-1",
+      accountId: "acct-1",
+      sessionId: "sess-fresh",
+    });
+    await expect(
+      restartedClient.createNextSession({
+        accountId: "acct-1",
+        expectedActiveSessionId: "sess-stale",
+        commandId: "cmd-fresh",
+      }),
+    ).resolves.toEqual({
+      hostId: "host-1",
+      accountId: "acct-1",
+      sessionId: "sess-fresh",
+    });
+    expect(transport.createSessionCalls).toEqual([]);
   });
 });
