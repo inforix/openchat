@@ -53,6 +53,7 @@ describe("openchat crypto", () => {
     const verified = verifyPairingToken({
       token,
       expectedHostId: "host-1",
+      expectedEdgeKeyFingerprint: fingerprintPublicKey(edge.publicKey),
       seenPairingNonces,
       now: new Date("2030-01-01T00:00:00.000Z"),
     });
@@ -62,7 +63,7 @@ describe("openchat crypto", () => {
     expect(verified.edgeKeyFingerprint).toBe(fingerprintPublicKey(edge.publicKey));
   });
 
-  it("rejects pairing verification when the edge fingerprint is tampered with", () => {
+  it("requires an out-of-band confirmed fingerprint for first-time pairing", () => {
     const edge = generateDeviceKeyPair();
     const token = createPairingToken({
       hostId: "host-1",
@@ -73,11 +74,29 @@ describe("openchat crypto", () => {
 
     expect(() =>
       verifyPairingToken({
-        token: {
-          ...token,
-          edgeKeyFingerprint: fingerprintPublicKey(generateDeviceKeyPair().publicKey),
-        },
+        token,
         expectedHostId: "host-1",
+        seenPairingNonces: new Set<string>(),
+        now: new Date("2030-01-01T00:00:00.000Z"),
+      }),
+    ).toThrow(/confirmed fingerprint/i);
+  });
+
+  it("rejects pairing verification when the host-confirmed fingerprint does not match", () => {
+    const trustedEdge = generateDeviceKeyPair();
+    const forgedEdge = generateDeviceKeyPair();
+    const token = createPairingToken({
+      hostId: "host-1",
+      edgePublicKey: forgedEdge.publicKey,
+      expiresAt: new Date("2099-01-01T00:00:00.000Z").toISOString(),
+      pairingNonce: "nonce-3",
+    });
+
+    expect(() =>
+      verifyPairingToken({
+        token,
+        expectedHostId: "host-1",
+        expectedEdgeKeyFingerprint: fingerprintPublicKey(trustedEdge.publicKey),
         seenPairingNonces: new Set<string>(),
         now: new Date("2030-01-01T00:00:00.000Z"),
       }),
@@ -123,6 +142,7 @@ describe("openchat crypto", () => {
       verifyPairingToken({
         token,
         expectedHostId: "host-1",
+        expectedEdgeKeyFingerprint: fingerprintPublicKey(edge.publicKey),
         seenPairingNonces: new Set<string>(),
         now: new Date("2026-01-01T00:00:00.000Z"),
       }),
@@ -142,6 +162,7 @@ describe("openchat crypto", () => {
     verifyPairingToken({
       token,
       expectedHostId: "host-1",
+      expectedEdgeKeyFingerprint: fingerprintPublicKey(edge.publicKey),
       seenPairingNonces,
       now: new Date("2030-01-01T00:00:00.000Z"),
     });
@@ -150,6 +171,7 @@ describe("openchat crypto", () => {
       verifyPairingToken({
         token,
         expectedHostId: "host-1",
+        expectedEdgeKeyFingerprint: fingerprintPublicKey(edge.publicKey),
         seenPairingNonces,
         now: new Date("2030-01-01T00:00:00.000Z"),
       }),

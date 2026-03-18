@@ -12,7 +12,7 @@
     "dev": "echo \"No dev task yet\"",
     "build": "echo \"No build yet\"",
     "vitest": "vitest",
-    "test": "echo \"No tests yet\"",
+    "test": "vitest run",
     "lint": "tsc --project tsconfig.json --noEmit",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   }

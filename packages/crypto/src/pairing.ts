@@ -16,6 +16,7 @@ export type TrustRecord = {
 export type VerifyPairingTokenInput = {
   token: PairingToken;
   expectedHostId: string;
+  expectedEdgeKeyFingerprint?: string;
   seenPairingNonces: Set<string>;
   now: Date;
   trustRecord?: TrustRecord;
@@ -63,13 +64,25 @@ export function verifyPairingToken(input: VerifyPairingTokenInput): VerifiedPair
     throw new Error("Pairing nonce has already been used");
   }
 
+  const pinnedFingerprint =
+    input.trustRecord?.edgeKeyFingerprint ?? input.expectedEdgeKeyFingerprint;
+
   if (input.trustRecord) {
     if (input.trustRecord.hostId !== input.expectedHostId) {
       throw new Error("Trust record hostId does not match the expected host");
     }
-    if (input.trustRecord.edgeKeyFingerprint !== input.token.edgeKeyFingerprint) {
-      throw new Error("The trusted edge key fingerprint changed; re-pairing is required");
-    }
+  }
+
+  if (!pinnedFingerprint) {
+    throw new Error(
+      "A confirmed fingerprint is required for first-time pairing",
+    );
+  }
+
+  if (pinnedFingerprint !== input.token.edgeKeyFingerprint) {
+    throw new Error(
+      "The trusted edge key fingerprint changed; re-pairing is required",
+    );
   }
 
   input.seenPairingNonces.add(input.token.pairingNonce);
@@ -78,7 +91,7 @@ export function verifyPairingToken(input: VerifyPairingTokenInput): VerifiedPair
     ...input.token,
     trustRecord: createTrustRecord({
       hostId: input.token.hostId,
-      edgeKeyFingerprint: input.token.edgeKeyFingerprint,
+      edgeKeyFingerprint: pinnedFingerprint,
     }),
   };
 }
