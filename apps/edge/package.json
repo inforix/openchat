@@ -20,6 +20,7 @@
     "@openchat/crypto": "workspace:*",
     "@openchat/openclaw-client": "workspace:*",
     "@openchat/protocol": "workspace:*",
+    "ws": "^8.18.1",
     "zod": "^3.24.2"
   },
   "devDependencies": {
