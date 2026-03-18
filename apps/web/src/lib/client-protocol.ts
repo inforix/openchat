@@ -1,12 +1,13 @@
 import type {
   BotCreateRequest,
   BotAccount,
+  BotListResultPayload,
   MessageSendRequest,
   MessageSendResult,
   ProtocolErrorCode,
   StreamEvent,
 } from "@openchat/protocol";
-import { deriveBotId } from "@openchat/protocol";
+import { BotListResultPayloadSchema, deriveBotId } from "@openchat/protocol";
 import { useEffect, useState } from "react";
 
 import {
@@ -94,6 +95,35 @@ type ProtocolSeed = {
 type MessageCommandHandlerResult = {
   result: MessageSendResult;
   stream?: AsyncIterable<StreamEvent>;
+};
+
+type RelayBotListEventMessage = {
+  type: "relay.encrypted.event";
+  event: {
+    requestId: string;
+    eventType: string;
+    encryptedPayload: string;
+  };
+};
+
+type RelayHostSnapshotLoaderOptions = {
+  relayHttpUrl: string;
+  relayWebSocketUrl: string;
+  deviceId: string;
+  deviceCredential: string;
+  requestTimeoutMs?: number;
+  fetchImpl?: typeof fetch;
+  webSocketFactory?: (url: string) => unknown;
+};
+
+type RelayWebSocketLike = {
+  readyState: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  onopen: ((event: Event) => void) | null;
+  onmessage: ((event: MessageEvent<unknown>) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  onclose: ((event: CloseEvent) => void) | null;
 };
 
 const listeners = new Set<() => void>();
@@ -263,6 +293,80 @@ export function setHostSnapshotLoader(
   loader: (hostId: string) => Promise<HostSnapshotRecord>,
 ): void {
   hostSnapshotLoader = loader;
+}
+
+export function installRelayHostSnapshotLoader(
+  input: RelayHostSnapshotLoaderOptions,
+): void {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const requestTimeoutMs = input.requestTimeoutMs ?? 5_000;
+  const webSocketFactory =
+    input.webSocketFactory ??
+    ((url: string) => {
+      if (typeof WebSocket === "undefined") {
+        throw new Error("WebSocket is not available in this environment.");
+      }
+      return new WebSocket(url);
+    });
+
+  setHostSnapshotLoader(async (hostId) => {
+    const currentHost = findHost(hostId) ?? {
+      hostId,
+      name: hostId,
+      edgeKeyFingerprint: "unavailable",
+      status: "offline" as const,
+    };
+
+    try {
+      const authResponse = await fetchImpl(`${input.relayHttpUrl}/auth/bootstrap`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          deviceId: input.deviceId,
+          hostId,
+          deviceCredential: input.deviceCredential,
+        }),
+      });
+      const auth = (await authResponse.json()) as {
+        ok: boolean;
+        sessionToken?: string;
+      };
+
+      if (!authResponse.ok || !auth.ok || !auth.sessionToken) {
+        return createOfflineHostSnapshot(currentHost);
+      }
+
+      const requestId = `relay-bot-list-${hostId}-${createCommandId()}`;
+      const socket = webSocketFactory(
+        `${input.relayWebSocketUrl}?role=client&sessionToken=${encodeURIComponent(auth.sessionToken)}`,
+      ) as RelayWebSocketLike;
+      const payload = await requestRelayBotList({
+        socket,
+        requestId,
+        timeoutMs: requestTimeoutMs,
+      });
+      const existingBots = getVisibleBotsForHost(hostId);
+
+      return {
+        host: {
+          ...currentHost,
+          status: "online",
+        },
+        bots: payload.bots.map((bot) => {
+          const existing =
+            existingBots.find((candidate) => candidate.accountId === bot.accountId) ?? null;
+          return toRelayBotRecord(bot, existing);
+        }),
+        sessions: {},
+        archivedSessionsByBot: {},
+        sessionRecordsById: {},
+      };
+    } catch {
+      return createOfflineHostSnapshot(currentHost);
+    }
+  });
 }
 
 export function setMessageCommandHandler(
@@ -674,6 +778,19 @@ function findHost(hostId: string, snapshot = state): HostRecord | null {
   return snapshot.hosts.find((host) => host.hostId === hostId) ?? null;
 }
 
+function createOfflineHostSnapshot(host: HostRecord): HostSnapshotRecord {
+  return {
+    host: {
+      ...host,
+      status: "offline",
+    },
+    bots: getVisibleBotsForHost(host.hostId),
+    sessions: {},
+    archivedSessionsByBot: {},
+    sessionRecordsById: {},
+  };
+}
+
 function getVisibleBotsForHost(hostId: string, snapshot = state): BotRecord[] {
   const host = findHost(hostId, snapshot);
 
@@ -807,6 +924,135 @@ function getSessionRecordKey(session: SessionRecord): string {
 function createCommandId(): string {
   commandSequence += 1;
   return `cmd-${commandSequence}`;
+}
+
+function toRelayBotRecord(bot: BotAccount, existing: BotRecord | null): BotRecord {
+  return {
+    ...bot,
+    title: existing?.title ?? bot.accountId,
+    backing: "openclaw",
+  };
+}
+
+async function requestRelayBotList(input: {
+  socket: RelayWebSocketLike;
+  requestId: string;
+  timeoutMs: number;
+}): Promise<BotListResultPayload> {
+  const socket = input.socket;
+  await waitForSocketOpen(socket);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = window.setTimeout(() => {
+      finish(() => {
+        socket.close();
+        reject(new Error("Relay bot list request timed out."));
+      });
+    }, input.timeoutMs);
+
+    const finish = (action: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timeout);
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      action();
+    };
+
+    socket.onmessage = (event) => {
+      let payload: RelayBotListEventMessage;
+      try {
+        payload = JSON.parse(readSocketDataAsText(event.data)) as RelayBotListEventMessage;
+      } catch {
+        return;
+      }
+
+      if (
+        payload.type !== "relay.encrypted.event" ||
+        payload.event.requestId !== input.requestId ||
+        payload.event.eventType !== "edge.bot.list.result"
+      ) {
+        return;
+      }
+
+      try {
+        const botListPayload = BotListResultPayloadSchema.parse(
+          JSON.parse(payload.event.encryptedPayload) as BotListResultPayload,
+        );
+        finish(() => {
+          socket.close();
+          resolve(botListPayload);
+        });
+      } catch (error) {
+        finish(() => {
+          socket.close();
+          reject(error);
+        });
+      }
+    };
+
+    socket.onerror = () => {
+      finish(() => {
+        socket.close();
+        reject(new Error("Unable to reach relay websocket."));
+      });
+    };
+
+    socket.onclose = () => {
+      finish(() => {
+        reject(new Error("Relay websocket closed before bot list arrived."));
+      });
+    };
+
+    socket.send(
+      JSON.stringify({
+        type: "client.bot.list.request",
+        requestId: input.requestId,
+      }),
+    );
+  });
+}
+
+async function waitForSocketOpen(socket: RelayWebSocketLike): Promise<void> {
+  if (socket.readyState === 1) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const handleOpen = () => {
+      socket.onopen = null;
+      socket.onerror = null;
+      resolve();
+    };
+    const handleError = () => {
+      socket.onopen = null;
+      socket.onerror = null;
+      reject(new Error("Unable to open relay websocket."));
+    };
+
+    socket.onopen = handleOpen;
+    socket.onerror = handleError;
+  });
+}
+
+function readSocketDataAsText(data: unknown): string {
+  if (typeof data === "string") {
+    return data;
+  }
+
+  if (data instanceof ArrayBuffer) {
+    return new TextDecoder().decode(new Uint8Array(data));
+  }
+
+  if (ArrayBuffer.isView(data)) {
+    return new TextDecoder().decode(data);
+  }
+
+  return String(data);
 }
 
 export function botRouteId(input: { hostId: string; accountId: string }): string {
