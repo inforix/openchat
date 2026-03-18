@@ -20,6 +20,8 @@ type BotListProps = {
   selectedHostId: string | null;
   hostStatus: BotListHost["status"] | null;
   bots: BotListEntry[];
+  createBotHref: string | null;
+  getBotHref: (bot: BotListEntry) => string;
   onSelectHost: (hostId: string) => void;
   onReconnect: () => void | Promise<void>;
 };
@@ -29,6 +31,8 @@ export function BotList({
   selectedHostId,
   hostStatus,
   bots,
+  createBotHref,
+  getBotHref,
   onSelectHost,
   onReconnect,
 }: BotListProps) {
@@ -42,9 +46,16 @@ export function BotList({
             Pick a host first, then inspect its OpenClaw-backed bot roster.
           </p>
         </div>
-        <button className="utility-button" type="button" onClick={() => void onReconnect()}>
-          {hostStatus === "offline" ? "Reconnect to host" : "Refresh from host"}
-        </button>
+        <div className="panel-actions">
+          <button className="utility-button" type="button" onClick={() => void onReconnect()}>
+            {hostStatus === "offline" ? "Reconnect to host" : "Refresh from host"}
+          </button>
+          {createBotHref ? (
+            <a className="utility-button" href={createBotHref}>
+              Create bot on {hosts.find((host) => host.hostId === selectedHostId)?.name ?? "host"}
+            </a>
+          ) : null}
+        </div>
       </div>
       <div className="host-switcher" aria-label="Host switcher">
         {hosts.map((host) => {
@@ -73,6 +84,9 @@ export function BotList({
               <span>OpenClaw account</span>
               <span>{bot.activeSessionId}</span>
             </div>
+            <a className="action-button" href={getBotHref(bot)}>
+              Open {bot.title}
+            </a>
           </li>
         ))}
         {bots.length === 0 ? <li className="bot-row is-empty">No bots available.</li> : null}

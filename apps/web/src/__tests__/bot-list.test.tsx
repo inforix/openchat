@@ -115,6 +115,42 @@ describe("web client shell", () => {
     expect(screen.getAllByText(/openclaw account/i)).toHaveLength(2);
   });
 
+  it("links each rendered bot into its active session route", () => {
+    const ledgerBot = createBot(hostAlpha.hostId, "acct-ledger", "agent-ledger", "Ledger Room");
+
+    seedClientProtocol({
+      hosts: [hostAlpha],
+      selectedHostId: hostAlpha.hostId,
+      botsByHost: {
+        [hostAlpha.hostId]: [ledgerBot],
+      },
+      sessionsByBot: {},
+    });
+
+    render(<HomeScreen />);
+
+    expect(
+      screen.getByRole("link", { name: /open ledger room/i }),
+    ).toHaveAttribute("href", `/hosts/${hostAlpha.hostId}/bots/${ledgerBot.botId}`);
+  });
+
+  it("exposes a first-class create-bot route for the selected host", () => {
+    seedClientProtocol({
+      hosts: [hostAlpha],
+      selectedHostId: hostAlpha.hostId,
+      botsByHost: {
+        [hostAlpha.hostId]: [createBot(hostAlpha.hostId, "acct-ledger", "agent-ledger")],
+      },
+      sessionsByBot: {},
+    });
+
+    render(<HomeScreen />);
+
+    expect(
+      screen.getByRole("link", { name: /create bot on north relay/i }),
+    ).toHaveAttribute("href", `/hosts/${hostAlpha.hostId}/bots/new`);
+  });
+
   it("submits accountId and agentId and only shows success after host confirmation", async () => {
     const user = userEvent.setup();
     const confirmation = createDeferred<{

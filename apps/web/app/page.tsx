@@ -3,7 +3,7 @@
 import { BotList } from "@openchat/ui";
 import React from "react";
 
-import { useClientShell } from "../src/lib/client-protocol";
+import { botRouteId, useClientShell } from "../src/lib/client-protocol";
 
 export function HomeScreen() {
   const { bots, host, hosts, reconnectHost, selectHost, selectedHostId } = useClientShell();
@@ -25,6 +25,13 @@ export function HomeScreen() {
         selectedHostId={selectedHostId}
         hostStatus={host?.status ?? null}
         bots={bots}
+        createBotHref={host ? `/hosts/${host.hostId}/bots/new` : null}
+        getBotHref={(bot) =>
+          `/hosts/${host?.hostId ?? ""}/bots/${botRouteId({
+            hostId: host?.hostId ?? "",
+            accountId: bot.accountId,
+          })}`
+        }
         onSelectHost={selectHost}
         onReconnect={() => (host ? reconnectHost(host.hostId) : Promise.resolve())}
       />

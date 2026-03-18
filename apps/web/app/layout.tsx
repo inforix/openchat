@@ -129,6 +129,13 @@ export default function RootLayout({ children }: RootLayoutProps) {
             margin-bottom: 16px;
           }
 
+          .panel-actions {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+          }
+
           .panel-header h1,
           .panel-header h2 {
             margin: 0;
@@ -154,10 +161,14 @@ export default function RootLayout({ children }: RootLayoutProps) {
           .host-pill,
           .utility-button,
           .action-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             border: 1px solid rgba(22, 22, 22, 0.16);
             background: #fffdf8;
             color: var(--ink);
             cursor: pointer;
+            text-decoration: none;
             transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
           }
 
