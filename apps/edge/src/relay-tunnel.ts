@@ -2,10 +2,14 @@ import { randomUUID } from "node:crypto";
 
 import {
   BotListResultPayloadSchema,
+  SessionHistoryResultPayloadSchema,
   SessionSnapshotResultPayloadSchema,
   type BotAccount,
 } from "../../../packages/protocol/src/index";
-import type { ArchivedSessionSummary } from "../../../packages/openclaw-client/src/index";
+import type {
+  ArchivedSessionSummary,
+  SessionTranscript,
+} from "../../../packages/openclaw-client/src/index";
 
 import type { EdgeConfig } from "./config";
 
@@ -30,6 +34,13 @@ export type RelayClient = {
       deviceId: string;
       hostId: string;
       accountId: string;
+    } | {
+      type: "client.session.history.request";
+      requestId: string;
+      deviceId: string;
+      hostId: string;
+      accountId: string;
+      sessionId: string;
     }>
   >;
   publishEncryptedEvent?(input: {
@@ -57,6 +68,10 @@ type RelayTunnelHandlers = {
     activeSessionId: string | null;
     archivedSessions: ArchivedSessionSummary[];
   }>;
+  getSessionTranscript(input: {
+    accountId: string;
+    sessionId: string;
+  }): Promise<SessionTranscript | null>;
 };
 
 const supportsBotListTransport = (
@@ -74,6 +89,28 @@ export const createRelayTunnel = (
   let stopped = false;
   let requestLoop: Promise<void> | null = null;
 
+  const publishIfRunning = async (input: {
+    requestId: string;
+    eventId: string;
+    deviceId: string;
+    cursor: string;
+    eventType: string;
+    encryptedPayload: string;
+  }): Promise<void> => {
+    if (stopped || !supportsBotListTransport(relay)) {
+      return;
+    }
+
+    try {
+      await relay.publishEncryptedEvent(input);
+    } catch (error) {
+      if (stopped) {
+        return;
+      }
+      throw error;
+    }
+  };
+
   const publishBotListResult = async (input: {
     requestId: string;
     deviceId: string;
@@ -87,7 +124,7 @@ export const createRelayTunnel = (
       type: "bot.list.result",
       bots: input.bots,
     });
-    await relay.publishEncryptedEvent({
+    await publishIfRunning({
       requestId: input.requestId,
       eventId: randomUUID(),
       deviceId: input.deviceId,
@@ -123,21 +160,51 @@ export const createRelayTunnel = (
           continue;
         }
 
-        const snapshot = await handlers.getSessionSnapshot({
+        if (request.type === "client.session.snapshot.request") {
+          const snapshot = await handlers.getSessionSnapshot({
+            accountId: request.accountId,
+          });
+          if (stopped) {
+            return;
+          }
+          const payload = SessionSnapshotResultPayloadSchema.parse({
+            type: "session.snapshot.result",
+            accountId: snapshot.accountId,
+            activeSessionId: snapshot.activeSessionId,
+            archivedSessions: snapshot.archivedSessions,
+          });
+          await publishIfRunning({
+            requestId: request.requestId,
+            eventId: randomUUID(),
+            deviceId: request.deviceId,
+            cursor: randomUUID(),
+            eventType: "edge.session.snapshot.result",
+            encryptedPayload: JSON.stringify(payload),
+          });
+          continue;
+        }
+
+        const session = await handlers.getSessionTranscript({
           accountId: request.accountId,
+          sessionId: request.sessionId,
         });
-        const payload = SessionSnapshotResultPayloadSchema.parse({
-          type: "session.snapshot.result",
-          accountId: snapshot.accountId,
-          activeSessionId: snapshot.activeSessionId,
-          archivedSessions: snapshot.archivedSessions,
+        if (stopped || !session) {
+          continue;
+        }
+
+        const payload = SessionHistoryResultPayloadSchema.parse({
+          type: "session.history.result",
+          accountId: request.accountId,
+          sessionId: request.sessionId,
+          title: session.title,
+          messages: session.messages,
         });
-        await relay.publishEncryptedEvent({
+        await publishIfRunning({
           requestId: request.requestId,
           eventId: randomUUID(),
           deviceId: request.deviceId,
           cursor: randomUUID(),
-          eventType: "edge.session.snapshot.result",
+          eventType: "edge.session.history.result",
           encryptedPayload: JSON.stringify(payload),
         });
       }

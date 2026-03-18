@@ -13,9 +13,19 @@ export type ClientSessionSnapshotRequest = {
   accountId: string;
 };
 
+export type ClientSessionHistoryRequest = {
+  type: "client.session.history.request";
+  requestId: string;
+  deviceId: string;
+  hostId: string;
+  accountId: string;
+  sessionId: string;
+};
+
 export type ClientHostRequest =
   | ClientBotListRequest
-  | ClientSessionSnapshotRequest;
+  | ClientSessionSnapshotRequest
+  | ClientSessionHistoryRequest;
 
 type HostRequestSink = (request: ClientHostRequest) => void;
 
@@ -23,6 +33,7 @@ export type HostAwareRouter = {
   attachHost(hostId: string, sink: HostRequestSink): () => void;
   routeBotListRequest(request: ClientBotListRequest): boolean;
   routeSessionSnapshotRequest(request: ClientSessionSnapshotRequest): boolean;
+  routeSessionHistoryRequest(request: ClientSessionHistoryRequest): boolean;
 };
 
 export const createHostAwareRouter = (): HostAwareRouter => {
@@ -49,6 +60,15 @@ export const createHostAwareRouter = (): HostAwareRouter => {
     },
 
     routeSessionSnapshotRequest(request) {
+      const sink = hostSinks.get(request.hostId);
+      if (!sink) {
+        return false;
+      }
+      sink(request);
+      return true;
+    },
+
+    routeSessionHistoryRequest(request) {
       const sink = hostSinks.get(request.hostId);
       if (!sink) {
         return false;

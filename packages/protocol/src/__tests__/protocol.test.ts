@@ -7,7 +7,9 @@ import {
   EdgeCursorCommitEventSchema,
   EdgeHelloEventSchema,
   EdgeRegisterHostEventSchema,
+  EdgeSessionHistoryResultEventSchema,
   EdgeSessionSnapshotEventSchema,
+  SessionHistoryResultPayloadSchema,
   SessionSnapshotResultPayloadSchema,
   EdgeStreamEventSchema,
   MessageSendRequestSchema,
@@ -267,6 +269,17 @@ describe("relay-edge event protocol", () => {
         eventType: "edge.session.snapshot.result",
       }).eventType,
     ).toBe("edge.session.snapshot.result");
+
+    expect(
+      EdgeSessionHistoryResultEventSchema.parse({
+        requestId: "req-9",
+        eventId: "evt-9",
+        hostId: "host-1",
+        deviceId: "dev-1",
+        cursor: "cur-9",
+        eventType: "edge.session.history.result",
+      }).eventType,
+    ).toBe("edge.session.history.result");
   });
 
   it("requires relay envelope routing headers", () => {
@@ -450,5 +463,23 @@ describe("relay-edge event protocol", () => {
         archivedSessions: [],
       }).type,
     ).toBe("session.snapshot.result");
+  });
+
+  it("models decrypted session history payloads with transcript messages", () => {
+    expect(
+      SessionHistoryResultPayloadSchema.parse({
+        type: "session.history.result",
+        accountId: "acct-1",
+        sessionId: "sess-1",
+        title: "Session sess-1",
+        messages: [
+          {
+            id: "msg-1",
+            role: "assistant",
+            text: "Ready",
+          },
+        ],
+      }).type,
+    ).toBe("session.history.result");
   });
 });

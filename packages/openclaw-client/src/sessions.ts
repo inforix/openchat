@@ -3,6 +3,17 @@ export type UserMessagePayload = {
   text: string;
 };
 
+export type SessionTranscriptMessage = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  text: string;
+};
+
+export type ReadSessionResult = {
+  title: string;
+  messages: SessionTranscriptMessage[];
+};
+
 export type SessionNewCommandPayload = {
   kind: "systemCommand";
   command: {
@@ -20,6 +31,10 @@ export interface OpenClawTransport {
   configUnset(path: string): Promise<void>;
   agentsBind(input: { agentId: string; binding: string }): Promise<void>;
   createSession(input: { accountId: string }): Promise<{ sessionId: string }>;
+  readSession?(input: {
+    accountId: string;
+    sessionId: string;
+  }): Promise<ReadSessionResult | null>;
   sendMessage(input: {
     accountId: string;
     sessionId: string;
@@ -55,4 +70,18 @@ export const abortTransportMessage = async (
   },
 ): Promise<void> => {
   await transport.abortMessage(input);
+};
+
+export const readTransportSession = async (
+  transport: OpenClawTransport,
+  input: {
+    accountId: string;
+    sessionId: string;
+  },
+): Promise<ReadSessionResult | null> => {
+  if (typeof transport.readSession !== "function") {
+    return null;
+  }
+
+  return await transport.readSession(input);
 };

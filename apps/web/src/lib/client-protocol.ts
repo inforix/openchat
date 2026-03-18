@@ -5,12 +5,14 @@ import type {
   MessageSendRequest,
   MessageSendResult,
   ProtocolErrorCode,
+  SessionHistoryResultPayload,
   SessionSnapshotResultPayload,
   StreamEvent,
 } from "@openchat/protocol";
 import {
   BotListResultPayloadSchema,
   deriveBotId,
+  SessionHistoryResultPayloadSchema,
   SessionSnapshotResultPayloadSchema,
 } from "@openchat/protocol";
 import { useEffect, useState } from "react";
@@ -112,6 +114,7 @@ type RelayBotListEventMessage = {
 };
 
 type RelaySessionSnapshotEventMessage = RelayBotListEventMessage;
+type RelaySessionHistoryEventMessage = RelayBotListEventMessage;
 
 type RelayHostSnapshotLoaderOptions = {
   relayHttpUrl: string;
@@ -222,6 +225,12 @@ let sessionSnapshotLoader: (
   accountId: string,
 ) => Promise<SessionSnapshotRecord> = createDefaultSessionSnapshotLoader();
 let relaySessionSnapshotAutoSyncEnabled = false;
+let sessionHistoryLoader: (
+  hostId: string,
+  accountId: string,
+  sessionId: string,
+) => Promise<SessionRecord | null> = async () => null;
+let relaySessionHistoryAutoSyncEnabled = false;
 
 const pendingNewSessionCommands = new Map<string, Promise<MessageSendResult>>();
 let commandSequence = 0;
@@ -286,6 +295,8 @@ export function resetClientProtocol(): void {
   });
   sessionSnapshotLoader = createDefaultSessionSnapshotLoader();
   relaySessionSnapshotAutoSyncEnabled = false;
+  sessionHistoryLoader = async () => null;
+  relaySessionHistoryAutoSyncEnabled = false;
   pendingNewSessionCommands.clear();
   commandSequence = 0;
   clearPersistedProtocolState();
@@ -450,6 +461,68 @@ export function installRelaySessionSnapshotLoader(
   relaySessionSnapshotAutoSyncEnabled = true;
 }
 
+export function installRelaySessionHistoryLoader(
+  input: RelayHostSnapshotLoaderOptions,
+): void {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const requestTimeoutMs = input.requestTimeoutMs ?? 5_000;
+  const webSocketFactory =
+    input.webSocketFactory ??
+    ((url: string) => {
+      if (typeof WebSocket === "undefined") {
+        throw new Error("WebSocket is not available in this environment.");
+      }
+      return new WebSocket(url);
+    });
+
+  setSessionHistoryLoader(async (hostId, accountId, sessionId) => {
+    try {
+      const authResponse = await fetchImpl(`${input.relayHttpUrl}/auth/bootstrap`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          deviceId: input.deviceId,
+          hostId,
+          deviceCredential: input.deviceCredential,
+        }),
+      });
+      const auth = (await authResponse.json()) as {
+        ok: boolean;
+        sessionToken?: string;
+      };
+
+      if (!authResponse.ok || !auth.ok || !auth.sessionToken) {
+        return null;
+      }
+
+      const requestId = `relay-session-history-${hostId}-${accountId}-${sessionId}-${createCommandId()}`;
+      const socket = webSocketFactory(
+        `${input.relayWebSocketUrl}?role=client&sessionToken=${encodeURIComponent(auth.sessionToken)}`,
+      ) as RelayWebSocketLike;
+      const payload = await requestRelaySessionHistory({
+        socket,
+        requestId,
+        accountId,
+        sessionId,
+        timeoutMs: requestTimeoutMs,
+      });
+
+      return {
+        hostId,
+        accountId,
+        sessionId,
+        title: payload.title,
+        messages: payload.messages,
+      };
+    } catch {
+      return null;
+    }
+  });
+  relaySessionHistoryAutoSyncEnabled = true;
+}
+
 export function setMessageCommandHandler(
   handler: (request: MessageSendRequest) => Promise<MessageCommandHandlerResult>,
 ): void {
@@ -465,6 +538,21 @@ export function setSessionSnapshotLoader(
 
 export function shouldAutoSyncSessionSnapshots(): boolean {
   return relaySessionSnapshotAutoSyncEnabled;
+}
+
+export function setSessionHistoryLoader(
+  loader: (
+    hostId: string,
+    accountId: string,
+    sessionId: string,
+  ) => Promise<SessionRecord | null>,
+): void {
+  sessionHistoryLoader = loader;
+  relaySessionHistoryAutoSyncEnabled = false;
+}
+
+export function shouldAutoSyncSessionHistory(): boolean {
+  return relaySessionHistoryAutoSyncEnabled;
 }
 
 export function useClientShell(requestedHostId?: string) {
@@ -603,6 +691,54 @@ export async function syncSessionForBot(
   accountId: string,
 ): Promise<void> {
   await refreshSessionState(hostId, accountId);
+}
+
+export async function syncSessionTranscript(
+  hostId: string,
+  accountId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const nextSession = await sessionHistoryLoader(hostId, accountId, sessionId);
+  if (!nextSession) {
+    return false;
+  }
+
+  const botKey = getBotCacheKey({ hostId, accountId });
+  const activeBot = (state.botsByHost[hostId] ?? []).find(
+    (bot) => bot.accountId === accountId,
+  );
+  const sessionsByBot =
+    state.sessionsByBot[botKey]?.sessionId === sessionId ||
+    activeBot?.activeSessionId === sessionId
+      ? {
+          ...state.sessionsByBot,
+          [botKey]: nextSession,
+        }
+      : state.sessionsByBot;
+  const sessionRecordsById = {
+    ...state.sessionRecordsById,
+    [getSessionRecordKey(nextSession)]: nextSession,
+  };
+
+  state = {
+    ...state,
+    sessionsByBot,
+    sessionRecordsById,
+  };
+
+  if (activeBot?.activeSessionId === sessionId) {
+    cacheBotSessionSnapshot(
+      {
+        hostId,
+        accountId,
+      },
+      nextSession,
+    );
+  }
+
+  persistProtocolState();
+  emitChange();
+  return true;
 }
 
 export async function sendMessageForBot(input: {
@@ -1195,6 +1331,101 @@ async function requestRelaySessionSnapshot(input: {
         type: "client.session.snapshot.request",
         requestId: input.requestId,
         accountId: input.accountId,
+      }),
+    );
+  });
+}
+
+async function requestRelaySessionHistory(input: {
+  socket: RelayWebSocketLike;
+  requestId: string;
+  accountId: string;
+  sessionId: string;
+  timeoutMs: number;
+}): Promise<SessionHistoryResultPayload> {
+  const socket = input.socket;
+  await waitForSocketOpen(socket);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = window.setTimeout(() => {
+      finish(() => {
+        socket.close();
+        reject(new Error("Relay session history request timed out."));
+      });
+    }, input.timeoutMs);
+
+    const finish = (action: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timeout);
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      action();
+    };
+
+    socket.onmessage = (event) => {
+      let payload: RelaySessionHistoryEventMessage;
+      try {
+        payload = JSON.parse(readSocketDataAsText(event.data)) as RelaySessionHistoryEventMessage;
+      } catch {
+        return;
+      }
+
+      if (
+        payload.type !== "relay.encrypted.event" ||
+        payload.event.requestId !== input.requestId ||
+        payload.event.eventType !== "edge.session.history.result"
+      ) {
+        return;
+      }
+
+      try {
+        const sessionHistoryPayload = SessionHistoryResultPayloadSchema.parse(
+          JSON.parse(payload.event.encryptedPayload) as SessionHistoryResultPayload,
+        );
+
+        if (
+          sessionHistoryPayload.accountId !== input.accountId ||
+          sessionHistoryPayload.sessionId !== input.sessionId
+        ) {
+          throw new Error("Relay session history identity mismatch.");
+        }
+
+        finish(() => {
+          socket.close();
+          resolve(sessionHistoryPayload);
+        });
+      } catch (error) {
+        finish(() => {
+          socket.close();
+          reject(error);
+        });
+      }
+    };
+
+    socket.onerror = () => {
+      finish(() => {
+        socket.close();
+        reject(new Error("Unable to reach relay websocket."));
+      });
+    };
+
+    socket.onclose = () => {
+      finish(() => {
+        reject(new Error("Relay websocket closed before session history arrived."));
+      });
+    };
+
+    socket.send(
+      JSON.stringify({
+        type: "client.session.history.request",
+        requestId: input.requestId,
+        accountId: input.accountId,
+        sessionId: input.sessionId,
       }),
     );
   });

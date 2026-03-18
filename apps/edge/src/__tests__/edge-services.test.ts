@@ -29,6 +29,7 @@ type EdgeOpenClawAdapter = Pick<
   | "createOpenChatBot"
   | "getActiveSession"
   | "listArchivedSessions"
+  | "readSessionTranscript"
   | "createNextSession"
   | "sendMessage"
   | "abortMessage"
@@ -217,6 +218,13 @@ class ConfirmingOpenClawAdapter implements EdgeOpenClawAdapter {
 
   async listArchivedSessions(input: { accountId: string }) {
     return this.client.listArchivedSessions(input);
+  }
+
+  async readSessionTranscript(input: {
+    accountId: string;
+    sessionId: string;
+  }) {
+    return this.client.readSessionTranscript(input);
   }
 
   async createNextSession(input: {

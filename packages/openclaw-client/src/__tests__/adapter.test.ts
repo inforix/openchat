@@ -23,8 +23,20 @@ class FakeOpenClawTransport implements OpenClawTransport {
     payload: { kind: string };
   }> = [];
   readonly abortCalls: Array<{ accountId: string; sessionId: string }> = [];
+  readonly sessionReadCalls: Array<{ accountId: string; sessionId: string }> = [];
 
   private readonly config = new Map<string, unknown>();
+  private readonly sessionTranscripts = new Map<
+    string,
+    {
+      title: string;
+      messages: Array<{
+        id: string;
+        role: "user" | "assistant" | "system";
+        text: string;
+      }>;
+    }
+  >();
   private nextSessionNumber = 1;
   failNextBindWith: Error | null = null;
 
@@ -85,6 +97,44 @@ class FakeOpenClawTransport implements OpenClawTransport {
     sessionId: string;
   }): Promise<void> {
     this.abortCalls.push(input);
+  }
+
+  seedSessionTranscript(input: {
+    accountId: string;
+    sessionId: string;
+    title: string;
+    messages: Array<{
+      id: string;
+      role: "user" | "assistant" | "system";
+      text: string;
+    }>;
+  }): void {
+    this.sessionTranscripts.set(
+      `${input.accountId}:${input.sessionId}`,
+      structuredClone({
+        title: input.title,
+        messages: input.messages,
+      }),
+    );
+  }
+
+  async readSession(input: {
+    accountId: string;
+    sessionId: string;
+  }): Promise<{
+    title: string;
+    messages: Array<{
+      id: string;
+      role: "user" | "assistant" | "system";
+      text: string;
+    }>;
+  } | null> {
+    this.sessionReadCalls.push(structuredClone(input));
+    return (
+      structuredClone(
+        this.sessionTranscripts.get(`${input.accountId}:${input.sessionId}`),
+      ) ?? null
+    );
   }
 }
 
@@ -266,6 +316,54 @@ describe("openclaw host adapter", () => {
       accountId: "acct-1",
       sessionId: bot.activeSessionId,
     });
+  });
+
+  it("reads a session transcript from transport and binds it to host/account identity", async () => {
+    const transport = new FakeOpenClawTransport();
+    const stateDir = await createStateDir();
+    const client = createClient({ transport, stateDir });
+    const bot = await client.createOpenChatBot({
+      accountId: "acct-1",
+      agentId: "agent-1",
+    });
+
+    transport.seedSessionTranscript({
+      accountId: bot.accountId,
+      sessionId: bot.activeSessionId,
+      title: "Active session",
+      messages: [
+        {
+          id: `${bot.activeSessionId}-message-1`,
+          role: "assistant",
+          text: "Ready from OpenClaw.",
+        },
+      ],
+    });
+
+    await expect(
+      client.readSessionTranscript({
+        accountId: bot.accountId,
+        sessionId: bot.activeSessionId,
+      }),
+    ).resolves.toEqual({
+      hostId: "host-1",
+      accountId: bot.accountId,
+      sessionId: bot.activeSessionId,
+      title: "Active session",
+      messages: [
+        {
+          id: `${bot.activeSessionId}-message-1`,
+          role: "assistant",
+          text: "Ready from OpenClaw.",
+        },
+      ],
+    });
+    expect(transport.sessionReadCalls).toEqual([
+      {
+        accountId: bot.accountId,
+        sessionId: bot.activeSessionId,
+      },
+    ]);
   });
 
   it("creates a new session, promotes it to active, and archives the previous session", async () => {

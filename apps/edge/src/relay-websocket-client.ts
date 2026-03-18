@@ -17,9 +17,19 @@ export type RelayClientSessionSnapshotRequest = {
   accountId: string;
 };
 
+export type RelayClientSessionHistoryRequest = {
+  type: "client.session.history.request";
+  requestId: string;
+  deviceId: string;
+  hostId: string;
+  accountId: string;
+  sessionId: string;
+};
+
 export type RelayClientRequest =
   | RelayClientBotListRequest
-  | RelayClientSessionSnapshotRequest;
+  | RelayClientSessionSnapshotRequest
+  | RelayClientSessionHistoryRequest;
 
 export type RelayWebSocketClient = {
   registerEdge(input: RelayRegistration): Promise<void>;
@@ -79,6 +89,24 @@ const isClientSessionSnapshotRequest = (
     typeof candidate.deviceId === "string" &&
     typeof candidate.hostId === "string" &&
     typeof candidate.accountId === "string"
+  );
+};
+
+const isClientSessionHistoryRequest = (
+  value: unknown,
+): value is RelayClientSessionHistoryRequest => {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.type === "client.session.history.request" &&
+    typeof candidate.requestId === "string" &&
+    typeof candidate.deviceId === "string" &&
+    typeof candidate.hostId === "string" &&
+    typeof candidate.accountId === "string" &&
+    typeof candidate.sessionId === "string"
   );
 };
 
@@ -191,7 +219,11 @@ export const createRelayWebSocketClient = (
           return;
         }
 
-        if (!isClientBotListRequest(payload) && !isClientSessionSnapshotRequest(payload)) {
+        if (
+          !isClientBotListRequest(payload) &&
+          !isClientSessionSnapshotRequest(payload) &&
+          !isClientSessionHistoryRequest(payload)
+        ) {
           return;
         }
 

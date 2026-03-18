@@ -1,10 +1,12 @@
 "use client";
 
 import { ChatShell } from "@openchat/ui";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 import {
+  shouldAutoSyncSessionHistory,
   shouldAutoSyncSessionSnapshots,
+  syncSessionTranscript,
   syncSessionForBot,
   useClientShell,
 } from "../lib/client-protocol";
@@ -26,6 +28,7 @@ export function BotScreen({ hostId, botId }: BotScreenProps) {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const attemptedTranscriptLoads = useRef<Set<string>>(new Set());
   const bot = host && botId ? getBotById(host.hostId, botId) : null;
 
   useEffect(() => {
@@ -84,6 +87,33 @@ export function BotScreen({ hostId, botId }: BotScreenProps) {
     activeBot.activeSessionId,
     effectiveSessionId,
   );
+
+  useEffect(() => {
+    if (
+      !host ||
+      !bot ||
+      host.status !== "online" ||
+      !effectiveSessionId ||
+      session !== null ||
+      !shouldAutoSyncSessionHistory()
+    ) {
+      return;
+    }
+
+    const loadKey = `${host.hostId}:${bot.accountId}:${effectiveSessionId}`;
+    if (attemptedTranscriptLoads.current.has(loadKey)) {
+      return;
+    }
+
+    attemptedTranscriptLoads.current.add(loadKey);
+    void syncSessionTranscript(host.hostId, bot.accountId, effectiveSessionId).catch(() => {});
+  }, [
+    bot?.accountId,
+    effectiveSessionId,
+    host?.hostId,
+    host?.status,
+    session?.sessionId,
+  ]);
 
   async function handleSubmit(text: string): Promise<boolean> {
     setPending(true);

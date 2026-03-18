@@ -15,6 +15,11 @@ export type ClientConnection = {
   };
   requestBotList(input: { requestId: string }): void;
   requestSessionSnapshot(input: { requestId: string; accountId: string }): void;
+  requestSessionHistory(input: {
+    requestId: string;
+    accountId: string;
+    sessionId: string;
+  }): void;
   replayFromCursor(cursor: string): RelayBufferedEvent[];
   takeEvents(): RelayBufferedEvent[];
   disconnect(): void;
@@ -104,6 +109,16 @@ export const createRelayWsService = (
             deviceId: session.deviceId,
             hostId: session.hostId,
             accountId: request.accountId,
+          });
+        },
+        requestSessionHistory(request) {
+          input.router.routeSessionHistoryRequest({
+            type: "client.session.history.request",
+            requestId: request.requestId,
+            deviceId: session.deviceId,
+            hostId: session.hostId,
+            accountId: request.accountId,
+            sessionId: request.sessionId,
           });
         },
         replayFromCursor(cursor) {

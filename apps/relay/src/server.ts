@@ -23,6 +23,13 @@ type ClientSessionSnapshotRequestMessage = {
   accountId: string;
 };
 
+type ClientSessionHistoryRequestMessage = {
+  type: "client.session.history.request";
+  requestId: string;
+  accountId: string;
+  sessionId: string;
+};
+
 type EdgePublishEncryptedEventMessage = {
   type: "edge.publish.encrypted.event";
   requestId: string;
@@ -98,6 +105,22 @@ const isClientSessionSnapshotRequestMessage = (
     candidate.type === "client.session.snapshot.request" &&
     typeof candidate.requestId === "string" &&
     typeof candidate.accountId === "string"
+  );
+};
+
+const isClientSessionHistoryRequestMessage = (
+  value: unknown,
+): value is ClientSessionHistoryRequestMessage => {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.type === "client.session.history.request" &&
+    typeof candidate.requestId === "string" &&
+    typeof candidate.accountId === "string" &&
+    typeof candidate.sessionId === "string"
   );
 };
 
@@ -237,6 +260,19 @@ export const createRelayServer = (
         connection.requestSessionSnapshot({
           requestId: payload.requestId,
           accountId: payload.accountId,
+        });
+        const edgePeer = edgePeers.get(connection.session.hostId);
+        if (edgePeer) {
+          flushEdgePeer(edgePeer);
+        }
+        return;
+      }
+
+      if (isClientSessionHistoryRequestMessage(payload)) {
+        connection.requestSessionHistory({
+          requestId: payload.requestId,
+          accountId: payload.accountId,
+          sessionId: payload.sessionId,
         });
         const edgePeer = edgePeers.get(connection.session.hostId);
         if (edgePeer) {

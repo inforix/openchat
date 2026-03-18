@@ -17,9 +17,11 @@ import { OpenClawClientError, SessionConflictError } from "./errors";
 import {
   abortTransportMessage,
   createTransportSession,
+  readTransportSession,
   sendTransportMessage,
   type MessagePayload,
   type OpenClawTransport,
+  type SessionTranscriptMessage,
 } from "./sessions";
 
 const COMMAND_RETENTION_MS = 10 * 60 * 1000;
@@ -55,6 +57,14 @@ export type AbortMessageInput = {
   targetSessionId: string;
 };
 
+export type SessionTranscript = {
+  hostId: string;
+  accountId: string;
+  sessionId: string;
+  title: string;
+  messages: SessionTranscriptMessage[];
+};
+
 export type OpenClawClient = {
   listOpenChatBots(): Promise<OpenChatBot[]>;
   createOpenChatBot(input: CreateOpenChatBotInput): Promise<OpenChatBot>;
@@ -62,6 +72,10 @@ export type OpenClawClient = {
   listArchivedSessions(input: {
     accountId: string;
   }): Promise<ArchivedSessionSummary[]>;
+  readSessionTranscript(input: {
+    accountId: string;
+    sessionId: string;
+  }): Promise<SessionTranscript | null>;
   createNextSession(input: CreateNextSessionInput): Promise<ActiveSession>;
   sendMessage(input: SendMessageInput): Promise<void>;
   abortMessage(input: AbortMessageInput): Promise<void>;
@@ -263,6 +277,30 @@ export const createOpenClawClient = (
     }): Promise<ArchivedSessionSummary[]> {
       const state = await readAccountState(input.accountId);
       return cloneArchivedSessions(state?.archivedSessions ?? []);
+    },
+
+    async readSessionTranscript(input: {
+      accountId: string;
+      sessionId: string;
+    }): Promise<SessionTranscript | null> {
+      const accountId = requireNonEmpty(input.accountId, "accountId");
+      const sessionId = requireNonEmpty(input.sessionId, "sessionId");
+      const session = await readTransportSession(options.transport, {
+        accountId,
+        sessionId,
+      });
+
+      if (!session) {
+        return null;
+      }
+
+      return {
+        hostId: options.hostId,
+        accountId,
+        sessionId,
+        title: session.title,
+        messages: session.messages.map((message) => ({ ...message })),
+      };
     },
 
     async createNextSession(input: CreateNextSessionInput): Promise<ActiveSession> {

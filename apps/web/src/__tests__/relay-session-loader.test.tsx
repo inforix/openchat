@@ -27,6 +27,7 @@ import { createRelayWebSocketClient } from "../../../edge/src/relay-websocket-cl
 import { createRelayMain } from "../../../relay/src/main";
 import { createRelayServer } from "../../../relay/src/server";
 import {
+  installRelaySessionHistoryLoader,
   installRelaySessionSnapshotLoader,
   resetClientProtocol,
   seedClientProtocol,
@@ -49,6 +50,7 @@ type EdgeOpenClawAdapter = Pick<
   | "createOpenChatBot"
   | "getActiveSession"
   | "listArchivedSessions"
+  | "readSessionTranscript"
   | "createNextSession"
   | "sendMessage"
   | "abortMessage"
@@ -63,6 +65,17 @@ class FakeOpenClawTransport implements OpenClawTransport {
   readonly abortCalls: Array<{ accountId: string; sessionId: string }> = [];
 
   private readonly config = new Map<string, unknown>();
+  private readonly sessionTranscripts = new Map<
+    string,
+    {
+      title: string;
+      messages: Array<{
+        id: string;
+        role: "user" | "assistant" | "system";
+        text: string;
+      }>;
+    }
+  >();
   private nextSessionNumber = 1;
 
   async configGet(path: string): Promise<unknown> {
@@ -99,6 +112,43 @@ class FakeOpenClawTransport implements OpenClawTransport {
   }): Promise<void> {
     this.abortCalls.push(input);
   }
+
+  seedSessionTranscript(input: {
+    accountId: string;
+    sessionId: string;
+    title: string;
+    messages: Array<{
+      id: string;
+      role: "user" | "assistant" | "system";
+      text: string;
+    }>;
+  }): void {
+    this.sessionTranscripts.set(
+      `${input.accountId}:${input.sessionId}`,
+      structuredClone({
+        title: input.title,
+        messages: input.messages,
+      }),
+    );
+  }
+
+  async readSession(input: {
+    accountId: string;
+    sessionId: string;
+  }): Promise<{
+    title: string;
+    messages: Array<{
+      id: string;
+      role: "user" | "assistant" | "system";
+      text: string;
+    }>;
+  } | null> {
+    return (
+      structuredClone(
+        this.sessionTranscripts.get(`${input.accountId}:${input.sessionId}`),
+      ) ?? null
+    );
+  }
 }
 
 class ConfirmingOpenClawAdapter implements EdgeOpenClawAdapter {
@@ -122,6 +172,13 @@ class ConfirmingOpenClawAdapter implements EdgeOpenClawAdapter {
 
   async listArchivedSessions(input: { accountId: string }) {
     return this.client.listArchivedSessions(input);
+  }
+
+  async readSessionTranscript(input: {
+    accountId: string;
+    sessionId: string;
+  }) {
+    return this.client.readSessionTranscript(input);
   }
 
   async createNextSession(input: {
@@ -268,6 +325,105 @@ describe("relay-backed session snapshot loader", () => {
       expect(await screen.findByText(/active session sess-1/i)).toBeInTheDocument();
       expect(screen.queryByText("Stale active")).not.toBeInTheDocument();
       expect(screen.getByText(/no active session is available/i)).toBeInTheDocument();
+    } finally {
+      await edge.close();
+      await server.close();
+    }
+  });
+
+  it("loads the authoritative active transcript over relay when the client has only session metadata", async () => {
+    const relayDirectory = await createTempDir();
+    const edgeStateDirectory = await createTempDir();
+    const transport = new FakeOpenClawTransport();
+    const client = createOpenClawClient({
+      hostId: hostAlpha.hostId,
+      deviceId: "device-1",
+      stateDir: edgeStateDirectory,
+      transport,
+    });
+    const adapter = new ConfirmingOpenClawAdapter(client);
+    const bot = await adapter.createOpenChatBot({
+      accountId: "acct-ledger",
+      agentId: "agent-ledger",
+    });
+    transport.seedSessionTranscript({
+      accountId: bot.accountId,
+      sessionId: bot.activeSessionId,
+      title: `Session ${bot.activeSessionId}`,
+      messages: [
+        {
+          id: `${bot.activeSessionId}-message-1`,
+          role: "assistant",
+          text: "Authoritative transcript",
+        },
+      ],
+    });
+
+    const store = createRelayStore({
+      filename: join(relayDirectory, "relay.sqlite"),
+    });
+    store.registerDevice({
+      deviceId: "device-1",
+      userId: "user-1",
+      deviceCredential: "credential-1",
+    });
+    store.registerHost({
+      hostId: hostAlpha.hostId,
+      userId: "user-1",
+    });
+    store.bindDeviceToHost({
+      deviceId: "device-1",
+      hostId: hostAlpha.hostId,
+    });
+
+    const relay = createRelayMain({ store });
+    const server = createRelayServer({
+      relay,
+      host: "127.0.0.1",
+      port: 0,
+    });
+    await server.start();
+
+    const edge = createEdgeMain({
+      hostId: hostAlpha.hostId,
+      deviceId: "device-1",
+      stateDir: edgeStateDirectory,
+      relay: createRelayWebSocketClient({
+        relayWebSocketUrl: `${server.baseWebSocketUrl}/relay`,
+      }),
+      openClaw: adapter,
+      streamState: new FakeStreamStateSource(),
+    });
+    await edge.start();
+
+    seedClientProtocol({
+      hosts: [hostAlpha],
+      selectedHostId: hostAlpha.hostId,
+      botsByHost: {
+        [hostAlpha.hostId]: [createBotRecord(bot.accountId, bot.agentId, "Ledger Room", bot.activeSessionId)],
+      },
+      sessionsByBot: {},
+    });
+    installRelaySessionSnapshotLoader({
+      relayHttpUrl: server.baseHttpUrl,
+      relayWebSocketUrl: `${server.baseWebSocketUrl}/relay`,
+      deviceId: "device-1",
+      deviceCredential: "credential-1",
+      webSocketFactory: (url) => new NodeWebSocket(url),
+    });
+    installRelaySessionHistoryLoader({
+      relayHttpUrl: server.baseHttpUrl,
+      relayWebSocketUrl: `${server.baseWebSocketUrl}/relay`,
+      deviceId: "device-1",
+      deviceCredential: "credential-1",
+      webSocketFactory: (url) => new NodeWebSocket(url),
+    });
+
+    try {
+      render(<BotScreen hostId={hostAlpha.hostId} botId={bot.botId} />);
+
+      expect(await screen.findByText("Authoritative transcript")).toBeInTheDocument();
+      expect(screen.queryByText(/no active session is available/i)).not.toBeInTheDocument();
     } finally {
       await edge.close();
       await server.close();

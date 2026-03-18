@@ -2,6 +2,7 @@ import type {
   CreateOpenChatBotInput,
   MessagePayload,
   OpenChatBot,
+  SessionTranscript,
 } from "../../../packages/openclaw-client/src/index";
 import type { PairingToken } from "../../../packages/crypto/src/index";
 
@@ -19,7 +20,13 @@ import {
   type StreamStateSource,
 } from "./session-service";
 
-export type EdgeOpenClawServices = EdgeOpenClawAdapter & SessionOpenClawAdapter;
+export type EdgeOpenClawServices = EdgeOpenClawAdapter &
+  SessionOpenClawAdapter & {
+    readSessionTranscript(input: {
+      accountId: string;
+      sessionId: string;
+    }): Promise<SessionTranscript | null>;
+  };
 
 export type CreateEdgeMainInput = EdgeConfigInput & {
   relay: RelayClient;
@@ -80,6 +87,11 @@ const createRuntime = async (
           archivedSessions,
         };
       },
+      getSessionTranscript: async ({ accountId, sessionId }) =>
+        await input.openClaw.readSessionTranscript({
+          accountId,
+          sessionId,
+        }),
     }),
     pairingService: createPairingService(config),
     botService,
