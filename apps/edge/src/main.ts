@@ -24,7 +24,7 @@ export type EdgeOpenClawServices = EdgeOpenClawAdapter & SessionOpenClawAdapter;
 export type CreateEdgeMainInput = EdgeConfigInput & {
   relay: RelayClient;
   openClaw: EdgeOpenClawServices;
-  streamState?: StreamStateSource;
+  streamState: StreamStateSource;
 };
 
 export type EdgeMain = {
@@ -51,10 +51,12 @@ type EdgeRuntime = {
   sessionService: ReturnType<typeof createSessionService>;
 };
 
-const idleStreamStateSource: StreamStateSource = {
-  async hasActiveStream(): Promise<boolean> {
-    return false;
-  },
+const assertStreamState: (
+  streamState: StreamStateSource | undefined,
+) => asserts streamState is StreamStateSource = (streamState) => {
+  if (typeof streamState?.hasActiveStream !== "function") {
+    throw new Error("createEdgeMain requires streamState.hasActiveStream");
+  }
 };
 
 const createRuntime = async (
@@ -65,14 +67,12 @@ const createRuntime = async (
     relayTunnel: createRelayTunnel(config, input.relay),
     pairingService: createPairingService(config),
     botService: createBotService(input.openClaw),
-    sessionService: createSessionService(
-      input.openClaw,
-      input.streamState ?? idleStreamStateSource,
-    ),
+    sessionService: createSessionService(input.openClaw, input.streamState),
   };
 };
 
 export const createEdgeMain = (input: CreateEdgeMainInput): EdgeMain => {
+  assertStreamState(input.streamState);
   const runtime = createRuntime(input);
 
   return {

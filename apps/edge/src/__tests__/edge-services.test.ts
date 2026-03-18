@@ -17,68 +17,11 @@ import {
 } from "../../../../packages/openclaw-client/src/index";
 import { afterEach, describe, expect, it } from "vitest";
 
-type EdgeSendResult =
-  | {
-      ok: true;
-      activeSessionId: string;
-      resultingSessionId?: string;
-      forwarded: boolean;
-    }
-  | {
-      ok: false;
-      code: "session_busy" | "session_conflict";
-      activeSessionId: string | null;
-    };
-
-type TrustedDeviceRecord = {
-  deviceId: string;
-  hostId: string;
-  edgeKeyFingerprint: string;
-  pairedAt: string;
-};
-
 type TransportSendCall = {
   accountId: string;
   sessionId: string;
   payload: MessagePayload;
 };
-
-type EdgeMain = {
-  start(): Promise<void>;
-  createPairingResponse(input?: { ttlMs?: number }): Promise<PairingToken>;
-  confirmPairing(input: {
-    deviceId: string;
-    token: PairingToken;
-    confirmedEdgeKeyFingerprint: string;
-  }): Promise<TrustedDeviceRecord>;
-  listBots(): Promise<OpenChatBot[]>;
-  createBot(input: CreateOpenChatBotInput): Promise<OpenChatBot>;
-  handleMessage(input: {
-    accountId: string;
-    targetSessionId: string;
-    payload: MessagePayload;
-  }): Promise<EdgeSendResult>;
-};
-
-type CreateEdgeMain = (input: {
-  hostId: string;
-  deviceId: string;
-  stateDir: string;
-  relay: {
-    registerEdge(input: {
-      hostId: string;
-      edgeId: string;
-      edgePublicKey: string;
-      edgeKeyFingerprint: string;
-    }): Promise<void>;
-  };
-  openClaw: EdgeOpenClawAdapter;
-  streamState?: {
-    hasActiveStream(input: { accountId: string }): Promise<boolean>;
-  };
-  now?: () => Date;
-  generatePairingNonce?: () => string;
-}) => EdgeMain;
 
 type EdgeOpenClawAdapter = Pick<
   OpenClawClient,
@@ -92,6 +35,31 @@ type EdgeOpenClawAdapter = Pick<
 > & {
   confirmAccountCreated(input: CreateOpenChatBotInput): Promise<boolean>;
 };
+
+type CreateEdgeMain = typeof import("../index").createEdgeMain;
+type EdgeMain = ReturnType<CreateEdgeMain>;
+type EdgeSendResult = Awaited<ReturnType<EdgeMain["handleMessage"]>>;
+type TrustedDeviceRecord = Awaited<ReturnType<EdgeMain["confirmPairing"]>>;
+
+const assertCreateEdgeMainRequiresStreamState = (
+  createEdgeMain: CreateEdgeMain,
+): void => {
+  const relay = {
+    async registerEdge(): Promise<void> {},
+  };
+  const openClaw = {} as EdgeOpenClawAdapter;
+
+  // @ts-expect-error streamState must stay mandatory to preserve session_busy guarantees
+  createEdgeMain({
+    hostId: "host-1",
+    deviceId: "device-1",
+    stateDir: "/tmp/openchat-edge-state",
+    relay,
+    openClaw,
+  });
+};
+
+void assertCreateEdgeMainRequiresStreamState;
 
 const OPENCHAT_ACCOUNTS_CONFIG_PATH = "channels.openchat.accounts";
 const tempDirs: string[] = [];
@@ -131,6 +99,9 @@ class FakeStreamStateSource {
     return this.activeStreams.has(input.accountId);
   }
 }
+
+const createStreamState = (): FakeStreamStateSource =>
+  new FakeStreamStateSource();
 
 class FakeOpenClawTransport implements OpenClawTransport {
   readonly bindings: Array<{ agentId: string; binding: string }> = [];
@@ -263,9 +234,7 @@ const createStateDir = async (): Promise<string> => {
 };
 
 const loadCreateEdgeMain = async (): Promise<CreateEdgeMain> => {
-  const module = (await import("../index")) as {
-    createEdgeMain?: CreateEdgeMain;
-  };
+  const module = await import("../index");
   if (typeof module.createEdgeMain !== "function") {
     throw new Error("createEdgeMain export is missing");
   }
@@ -317,6 +286,7 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: adapter,
+      streamState: createStreamState(),
     });
 
     await edge.start();
@@ -326,6 +296,30 @@ describe("edge services", () => {
         hostId: "host-1",
       }),
     ]);
+  });
+
+  it("fails fast when streamState is missing at runtime", async () => {
+    const createEdgeMain = await loadCreateEdgeMain();
+    const relay = new FakeRelay();
+    const { adapter, stateDir } = await createOpenClawAdapter();
+
+    expect(() =>
+      (
+        createEdgeMain as unknown as (input: {
+          hostId: string;
+          deviceId: string;
+          stateDir: string;
+          relay: FakeRelay;
+          openClaw: EdgeOpenClawAdapter;
+        }) => EdgeMain
+      )({
+        hostId: "host-1",
+        deviceId: "device-1",
+        stateDir,
+        relay,
+        openClaw: adapter,
+      }),
+    ).toThrow(/streamstate/i);
   });
 
   it("returns pairing token data with edge key identity and a nonce-backed expiry", async () => {
@@ -341,6 +335,7 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: adapter,
+      streamState: createStreamState(),
       now: () => currentTime,
       generatePairingNonce: () => "nonce-1",
     });
@@ -372,6 +367,7 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: adapter,
+      streamState: createStreamState(),
       now: () => currentTime,
       generatePairingNonce: () => "nonce-2",
     });
@@ -431,6 +427,7 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: adapter,
+      streamState: createStreamState(),
       generatePairingNonce: () => "nonce-race",
     });
     const token = await edge.createPairingResponse({ ttlMs: 60_000 });
@@ -473,6 +470,7 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: adapter,
+      streamState: createStreamState(),
     });
 
     await adapter.createOpenChatBot({
@@ -504,6 +502,7 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: adapter,
+      streamState: createStreamState(),
     });
 
     await expect(
@@ -541,6 +540,7 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: adapter,
+      streamState: createStreamState(),
     });
     const bot = await edge.createBot({
       accountId: "acct-1",
@@ -713,6 +713,7 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: adapter,
+      streamState: createStreamState(),
     });
     const bot = await edge.createBot({
       accountId: "acct-1",
@@ -761,6 +762,7 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: adapter,
+      streamState: createStreamState(),
     });
     const bot = await edge.createBot({
       accountId: "acct-1",
@@ -815,6 +817,7 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: adapter,
+      streamState: createStreamState(),
     });
     const bot = await edge.createBot({
       accountId: "acct-1",
@@ -859,6 +862,7 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: firstAdapter,
+      streamState: createStreamState(),
       now: () => currentTime,
     });
     const bot = await firstEdge.createBot({
@@ -890,6 +894,7 @@ describe("edge services", () => {
       stateDir,
       relay,
       openClaw: restartedAdapter,
+      streamState: createStreamState(),
       now: () => currentTime,
     });
     const retriedResult = await restartedEdge.handleMessage({
