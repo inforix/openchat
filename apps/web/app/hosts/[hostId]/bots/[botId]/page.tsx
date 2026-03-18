@@ -1,7 +1,7 @@
 "use client";
 
 import { ChatShell } from "@openchat/ui";
-import React from "react";
+import React, { useEffect, useState } from "react";
 
 import { useClientShell } from "../../../../../src/lib/client-protocol";
 
@@ -11,7 +11,24 @@ type BotPageProps = {
 };
 
 export function BotPage({ hostId, botId }: BotPageProps) {
-  const { getBotById, getSessionForBot, host } = useClientShell(hostId);
+  const {
+    getArchivedSessionsForBot,
+    getBotById,
+    getSessionForBot,
+    getSessionRecordById,
+    host,
+    sendMessageForBot,
+  } = useClientShell(hostId);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const bot = host && botId ? getBotById(host.hostId, botId) : null;
+
+  useEffect(() => {
+    if (bot?.activeSessionId) {
+      setSelectedSessionId(bot.activeSessionId);
+    }
+  }, [bot?.activeSessionId]);
 
   if (!host || !botId) {
     return (
@@ -21,8 +38,6 @@ export function BotPage({ hostId, botId }: BotPageProps) {
     );
   }
 
-  const bot = getBotById(host.hostId, botId);
-
   if (!bot) {
     return (
       <main className="screen-shell">
@@ -31,29 +46,79 @@ export function BotPage({ hostId, botId }: BotPageProps) {
     );
   }
 
-  const sessionState = getSessionForBot(host.hostId, bot.accountId);
+  const activeHost = host;
+  const activeBot = bot;
+  const sessionState = getSessionForBot(activeHost.hostId, activeBot.accountId);
+  const archivedSessions = getArchivedSessionsForBot(activeHost.hostId, activeBot.accountId);
+  const activeSession = sessionState.session;
+  const effectiveSessionId =
+    selectedSessionId ?? activeSession?.sessionId ?? activeBot.activeSessionId;
+  const session =
+    getSessionRecordById(activeHost.hostId, activeBot.accountId, effectiveSessionId) ??
+    activeSession;
+  const readOnly = cachedReadOnly(
+    sessionState.fromCache,
+    activeBot.activeSessionId,
+    effectiveSessionId,
+  );
+
+  async function handleSubmit(text: string) {
+    setPending(true);
+    setStatusMessage(null);
+
+    const result = await sendMessageForBot({
+      hostId: activeHost.hostId,
+      accountId: activeBot.accountId,
+      text,
+    });
+
+    setPending(false);
+
+    if (!result.ok) {
+      if (result.code === "session_conflict") {
+        setStatusMessage("Session moved on the host. Reloaded the authoritative active session.");
+        return;
+      }
+
+      if (result.code === "session_busy") {
+        setStatusMessage("The active session is busy. Finish the current stream before /new.");
+        return;
+      }
+
+      if (result.code === "offline_read_only") {
+        setStatusMessage("Host offline. Cached views are read-only.");
+      }
+    }
+  }
 
   return (
     <main className="screen-shell">
       <header className="masthead">
         <div>
           <div className="masthead-tag">Host → Bot → Active Session</div>
-          <h1>{bot.title}</h1>
+          <h1>{activeBot.title}</h1>
           <p>The bot route resolves straight to the current active session.</p>
         </div>
       </header>
       <div className="route-strip">
-        <span>{host.hostId}</span>
+        <span>{activeHost.hostId}</span>
         <span>/</span>
-        <span>{bot.accountId}</span>
+        <span>{activeBot.accountId}</span>
         <span>/</span>
-        <span>{bot.botId}</span>
+        <span>{activeBot.botId}</span>
       </div>
       <ChatShell
-        host={host}
-        bot={bot}
-        session={sessionState.session}
+        host={activeHost}
+        bot={activeBot}
+        session={session}
         cached={sessionState.fromCache}
+        archivedSessions={archivedSessions}
+        selectedSessionId={effectiveSessionId}
+        readOnly={readOnly}
+        pending={pending}
+        statusMessage={statusMessage}
+        onSelectSession={setSelectedSessionId}
+        onSubmit={handleSubmit}
       />
     </main>
   );
@@ -65,4 +130,12 @@ export default function BotRoutePage({
   params: { hostId: string; botId: string };
 }) {
   return <BotPage hostId={params.hostId} botId={params.botId} />;
+}
+
+function cachedReadOnly(
+  cached: boolean,
+  activeSessionId: string,
+  selectedSessionId: string,
+): boolean {
+  return cached || selectedSessionId !== activeSessionId;
 }

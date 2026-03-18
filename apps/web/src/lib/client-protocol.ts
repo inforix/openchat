@@ -1,4 +1,11 @@
-import type { BotCreateRequest, BotAccount, ProtocolErrorCode } from "@openchat/protocol";
+import type {
+  BotCreateRequest,
+  BotAccount,
+  MessageSendRequest,
+  MessageSendResult,
+  ProtocolErrorCode,
+  StreamEvent,
+} from "@openchat/protocol";
 import { deriveBotId } from "@openchat/protocol";
 import { useEffect, useState } from "react";
 
@@ -34,10 +41,25 @@ export type SessionRecord = {
   }>;
 };
 
+export type ArchivedSessionRecord = {
+  sessionId: string;
+  archivedAt: string;
+  summary?: string;
+};
+
 export type HostSnapshotRecord = {
   host: HostRecord;
   bots: BotRecord[];
   sessions: Record<string, SessionRecord>;
+  archivedSessionsByBot?: Record<string, ArchivedSessionRecord[]>;
+  sessionRecordsById?: Record<string, SessionRecord>;
+};
+
+export type SessionSnapshotRecord = {
+  bot: BotRecord;
+  activeSession: SessionRecord | null;
+  archivedSessions: ArchivedSessionRecord[];
+  sessionRecords?: Record<string, SessionRecord>;
 };
 
 export type CreateBotResult =
@@ -56,6 +78,8 @@ type ProtocolState = {
   selectedHostId: string | null;
   botsByHost: Record<string, BotRecord[]>;
   sessionsByBot: Record<string, SessionRecord>;
+  archivedSessionsByBot: Record<string, ArchivedSessionRecord[]>;
+  sessionRecordsById: Record<string, SessionRecord>;
 };
 
 type ProtocolSeed = {
@@ -63,6 +87,13 @@ type ProtocolSeed = {
   selectedHostId?: string | null;
   botsByHost: Record<string, BotRecord[]>;
   sessionsByBot: Record<string, SessionRecord>;
+  archivedSessionsByBot?: Record<string, ArchivedSessionRecord[]>;
+  sessionRecordsById?: Record<string, SessionRecord>;
+};
+
+type MessageCommandHandlerResult = {
+  result: MessageSendResult;
+  stream?: AsyncIterable<StreamEvent>;
 };
 
 const listeners = new Set<() => void>();
@@ -72,12 +103,25 @@ let state: ProtocolState = {
   selectedHostId: null,
   botsByHost: {},
   sessionsByBot: {},
+  archivedSessionsByBot: {},
+  sessionRecordsById: {},
 };
 
 let createBotHandler: (request: BotCreateRequest) => Promise<CreateBotResult> = async () => ({
   ok: false,
   errorCode: "bot_create_failed",
   message: "Host creation handler is not configured.",
+});
+
+let messageCommandHandler: (
+  request: MessageSendRequest,
+) => Promise<MessageCommandHandlerResult> = async (request) => ({
+  result: {
+    ok: false,
+    code: "session_conflict",
+    activeSessionId: request.targetSessionId,
+    archivedSessions: [],
+  },
 });
 
 let hostSnapshotLoader: (hostId: string) => Promise<HostSnapshotRecord> = async (hostId) => ({
@@ -100,15 +144,66 @@ let hostSnapshotLoader: (hostId: string) => Promise<HostSnapshotRecord> = async 
     },
     {},
   ),
+  archivedSessionsByBot: {},
+  sessionRecordsById: {},
 });
 
+const createDefaultSessionSnapshotLoader = (): ((
+  hostId: string,
+  accountId: string,
+) => Promise<SessionSnapshotRecord>) => {
+  return async (hostId, accountId) => {
+    const bot = getVisibleBotsForHost(hostId).find(
+      (candidate) => candidate.accountId === accountId,
+    );
+    const botKey = getBotCacheKey({ hostId, accountId });
+
+    if (!bot) {
+      throw new Error(`bot ${accountId} not found for host ${hostId}`);
+    }
+
+    return {
+      bot,
+      activeSession: state.sessionsByBot[botKey] ?? null,
+      archivedSessions: state.archivedSessionsByBot[botKey] ?? [],
+      sessionRecords: Object.entries(state.sessionRecordsById).reduce<Record<string, SessionRecord>>(
+        (result, [key, session]) => {
+          if (key.startsWith(`${hostId}:${accountId}:`)) {
+            result[key] = session;
+          }
+          return result;
+        },
+        {},
+      ),
+    };
+  };
+};
+
+let sessionSnapshotLoader: (
+  hostId: string,
+  accountId: string,
+) => Promise<SessionSnapshotRecord> = createDefaultSessionSnapshotLoader();
+
+const pendingNewSessionCommands = new Map<string, Promise<MessageSendResult>>();
+let commandSequence = 0;
+
 export function seedClientProtocol(input: ProtocolSeed): void {
+  const sessionRecordsById = {
+    ...(input.sessionRecordsById ?? {}),
+  };
+
+  for (const session of Object.values(input.sessionsByBot)) {
+    sessionRecordsById[getSessionRecordKey(session)] = session;
+  }
+
   state = {
     hosts: [...input.hosts],
     selectedHostId:
       input.selectedHostId ?? input.hosts[0]?.hostId ?? null,
     botsByHost: { ...input.botsByHost },
     sessionsByBot: { ...input.sessionsByBot },
+    archivedSessionsByBot: { ...(input.archivedSessionsByBot ?? {}) },
+    sessionRecordsById,
   };
   emitChange();
 }
@@ -119,11 +214,21 @@ export function resetClientProtocol(): void {
     selectedHostId: null,
     botsByHost: {},
     sessionsByBot: {},
+    archivedSessionsByBot: {},
+    sessionRecordsById: {},
   };
   createBotHandler = async () => ({
     ok: false,
     errorCode: "bot_create_failed",
     message: "Host creation handler is not configured.",
+  });
+  messageCommandHandler = async (request) => ({
+    result: {
+      ok: false,
+      code: "session_conflict",
+      activeSessionId: request.targetSessionId,
+      archivedSessions: [],
+    },
   });
   hostSnapshotLoader = async (hostId) => ({
     host:
@@ -136,7 +241,12 @@ export function resetClientProtocol(): void {
       } satisfies HostRecord),
     bots: [],
     sessions: {},
+    archivedSessionsByBot: {},
+    sessionRecordsById: {},
   });
+  sessionSnapshotLoader = createDefaultSessionSnapshotLoader();
+  pendingNewSessionCommands.clear();
+  commandSequence = 0;
   emitChange();
 }
 
@@ -150,6 +260,18 @@ export function setHostSnapshotLoader(
   loader: (hostId: string) => Promise<HostSnapshotRecord>,
 ): void {
   hostSnapshotLoader = loader;
+}
+
+export function setMessageCommandHandler(
+  handler: (request: MessageSendRequest) => Promise<MessageCommandHandlerResult>,
+): void {
+  messageCommandHandler = handler;
+}
+
+export function setSessionSnapshotLoader(
+  loader: (hostId: string, accountId: string) => Promise<SessionSnapshotRecord>,
+): void {
+  sessionSnapshotLoader = loader;
 }
 
 export function useClientShell(requestedHostId?: string) {
@@ -169,9 +291,14 @@ export function useClientShell(requestedHostId?: string) {
     selectHost,
     reconnectHost,
     createBotForHost,
+    sendMessageForBot,
     getBotById: (hostId: string, botId: string) => getBotById(hostId, botId, snapshot),
     getSessionForBot: (hostId: string, accountId: string) =>
       getSessionForBot(hostId, accountId, snapshot),
+    getSessionRecordById: (hostId: string, accountId: string, sessionId: string) =>
+      getSessionRecordById(hostId, accountId, sessionId, snapshot),
+    getArchivedSessionsForBot: (hostId: string, accountId: string) =>
+      getArchivedSessionsForBot(hostId, accountId, snapshot),
   };
 }
 
@@ -233,9 +360,15 @@ export async function createBotForHost(input: {
 export async function reconnectHost(hostId: string): Promise<void> {
   const snapshot = await hostSnapshotLoader(hostId);
   const sessionsByBot = { ...state.sessionsByBot };
+  const sessionRecordsById = { ...state.sessionRecordsById };
+  const archivedSessionsByBot = {
+    ...state.archivedSessionsByBot,
+    ...(snapshot.archivedSessionsByBot ?? {}),
+  };
 
   for (const [cacheKey, session] of Object.entries(snapshot.sessions)) {
     sessionsByBot[cacheKey] = session;
+    sessionRecordsById[getSessionRecordKey(session)] = session;
     cacheBotSessionSnapshot(
       {
         hostId: session.hostId,
@@ -255,10 +388,253 @@ export async function reconnectHost(hostId: string): Promise<void> {
       [hostId]: snapshot.bots,
     },
     sessionsByBot,
+    archivedSessionsByBot,
+    sessionRecordsById: {
+      ...sessionRecordsById,
+      ...(snapshot.sessionRecordsById ?? {}),
+    },
   };
 
   cacheHostBotsSnapshot(hostId, snapshot.bots);
   emitChange();
+}
+
+export async function sendMessageForBot(input: {
+  hostId: string;
+  accountId: string;
+  text: string;
+}): Promise<MessageSendResult> {
+  const host = findHost(input.hostId);
+  const bot = getVisibleBotsForHost(input.hostId).find(
+    (candidate) => candidate.accountId === input.accountId,
+  );
+
+  if (!host || !bot) {
+    return {
+      ok: false,
+      code: "session_conflict",
+      activeSessionId: null,
+      archivedSessions: [],
+    };
+  }
+
+  if (host.status === "offline") {
+    return {
+      ok: false,
+      code: "offline_read_only",
+      activeSessionId: bot.activeSessionId,
+      archivedSessions: getArchivedSessionsForBot(input.hostId, input.accountId),
+    };
+  }
+
+  const trimmed = input.text.trim();
+  const targetSessionId = bot.activeSessionId;
+  const botKey = getBotCacheKey({
+    hostId: input.hostId,
+    accountId: input.accountId,
+  });
+
+  if (trimmed === "/new") {
+    const existing = pendingNewSessionCommands.get(botKey);
+    if (existing) {
+      return existing;
+    }
+
+    const commandId = createCommandId();
+    const promise = performSend({
+      hostId: input.hostId,
+      accountId: input.accountId,
+      text: input.text,
+      targetSessionId,
+      payload: {
+        kind: "systemCommand",
+        command: {
+          type: "session.new",
+          expectedActiveSessionId: targetSessionId,
+          commandId,
+        },
+      },
+    }).finally(() => {
+      pendingNewSessionCommands.delete(botKey);
+    });
+
+    pendingNewSessionCommands.set(botKey, promise);
+    return promise;
+  }
+
+  return performSend({
+    hostId: input.hostId,
+    accountId: input.accountId,
+    text: input.text,
+    targetSessionId,
+    payload: {
+      kind: "userMessage",
+      text: input.text,
+    },
+  });
+}
+
+async function performSend(input: {
+  hostId: string;
+  accountId: string;
+  targetSessionId: string;
+  text: string;
+  payload: MessageSendRequest["payload"];
+}): Promise<MessageSendResult> {
+  const response = await messageCommandHandler({
+    requestId: `message-${input.hostId}-${input.accountId}-${createCommandId()}`,
+    hostId: input.hostId,
+    accountId: input.accountId,
+    targetSessionId: input.targetSessionId,
+    payload: input.payload,
+  });
+
+  if (!response.result.ok) {
+    if (response.result.code === "session_conflict") {
+      await refreshSessionState(input.hostId, input.accountId);
+    } else {
+      syncArchivedSessions(input.hostId, input.accountId, response.result.archivedSessions);
+    }
+    return response.result;
+  }
+
+  syncArchivedSessions(input.hostId, input.accountId, response.result.archivedSessions);
+
+  if (input.payload.kind === "userMessage") {
+    appendConfirmedUserMessage(
+      input.hostId,
+      input.accountId,
+      input.targetSessionId,
+      input.text,
+    );
+    if (response.stream) {
+      await applyStreamEvents(
+        input.hostId,
+        input.accountId,
+        input.targetSessionId,
+        response.stream,
+      );
+    }
+    return response.result;
+  }
+
+  await refreshSessionState(input.hostId, input.accountId);
+  return response.result;
+}
+
+async function refreshSessionState(hostId: string, accountId: string): Promise<void> {
+  const snapshot = await sessionSnapshotLoader(hostId, accountId);
+  const botKey = getBotCacheKey({ hostId, accountId });
+  const nextBots = (state.botsByHost[hostId] ?? []).map((candidate) =>
+    candidate.accountId === accountId ? snapshot.bot : candidate,
+  );
+  const sessionRecordsById = {
+    ...state.sessionRecordsById,
+    ...(snapshot.sessionRecords ?? {}),
+  };
+
+  if (snapshot.activeSession) {
+    sessionRecordsById[getSessionRecordKey(snapshot.activeSession)] = snapshot.activeSession;
+    cacheBotSessionSnapshot(
+      {
+        hostId,
+        accountId,
+      },
+      snapshot.activeSession,
+    );
+  }
+
+  state = {
+    ...state,
+    botsByHost: {
+      ...state.botsByHost,
+      [hostId]: nextBots,
+    },
+    sessionsByBot: {
+      ...state.sessionsByBot,
+      [botKey]: snapshot.activeSession ?? state.sessionsByBot[botKey],
+    },
+    archivedSessionsByBot: {
+      ...state.archivedSessionsByBot,
+      [botKey]: snapshot.archivedSessions,
+    },
+    sessionRecordsById,
+  };
+
+  cacheHostBotsSnapshot(hostId, nextBots);
+  emitChange();
+}
+
+async function applyStreamEvents(
+  hostId: string,
+  accountId: string,
+  sessionId: string,
+  stream: AsyncIterable<StreamEvent>,
+): Promise<void> {
+  const assistantMessageId = `${sessionId}-assistant-stream`;
+
+  updateSessionRecord(hostId, accountId, sessionId, (session) => ({
+    ...session,
+    messages: [
+      ...session.messages,
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        text: "",
+      },
+    ],
+  }));
+
+  for await (const event of stream) {
+    if (event.type === "chunk") {
+      updateSessionRecord(hostId, accountId, sessionId, (session) => ({
+        ...session,
+        messages: session.messages.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                text: `${message.text}${event.delta}`,
+              }
+            : message,
+        ),
+      }));
+      continue;
+    }
+
+    if (event.type === "error") {
+      updateSessionRecord(hostId, accountId, sessionId, (session) => ({
+        ...session,
+        messages: session.messages.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                role: "system",
+                text: event.message,
+              }
+            : message,
+        ),
+      }));
+    }
+  }
+}
+
+function appendConfirmedUserMessage(
+  hostId: string,
+  accountId: string,
+  sessionId: string,
+  text: string,
+): void {
+  updateSessionRecord(hostId, accountId, sessionId, (session) => ({
+    ...session,
+    messages: [
+      ...session.messages,
+      {
+        id: `${sessionId}-user-${session.messages.length + 1}`,
+        role: "user",
+        text,
+      },
+    ],
+  }));
 }
 
 function getSnapshot(): ProtocolState {
@@ -326,6 +702,93 @@ function getSessionForBot(
     session: snapshot.sessionsByBot[cacheKey] ?? null,
     fromCache: false,
   };
+}
+
+function getArchivedSessionsForBot(
+  hostId: string,
+  accountId: string,
+  snapshot = state,
+): ArchivedSessionRecord[] {
+  const cacheKey = getBotCacheKey({ hostId, accountId });
+  return snapshot.archivedSessionsByBot[cacheKey] ?? [];
+}
+
+function getSessionRecordById(
+  hostId: string,
+  accountId: string,
+  sessionId: string,
+  snapshot = state,
+): SessionRecord | null {
+  return snapshot.sessionRecordsById[`${hostId}:${accountId}:${sessionId}`] ?? null;
+}
+
+function updateSessionRecord(
+  hostId: string,
+  accountId: string,
+  sessionId: string,
+  updater: (session: SessionRecord) => SessionRecord,
+): void {
+  const existing =
+    getSessionRecordById(hostId, accountId, sessionId) ??
+    state.sessionsByBot[getBotCacheKey({ hostId, accountId })];
+
+  if (!existing) {
+    return;
+  }
+
+  const nextSession = updater(existing);
+  const sessionRecordsById = {
+    ...state.sessionRecordsById,
+    [getSessionRecordKey(nextSession)]: nextSession,
+  };
+  const botKey = getBotCacheKey({ hostId, accountId });
+  const sessionsByBot =
+    state.sessionsByBot[botKey]?.sessionId === sessionId
+      ? {
+          ...state.sessionsByBot,
+          [botKey]: nextSession,
+        }
+      : state.sessionsByBot;
+
+  state = {
+    ...state,
+    sessionsByBot,
+    sessionRecordsById,
+  };
+
+  cacheBotSessionSnapshot(
+    {
+      hostId,
+      accountId,
+    },
+    nextSession,
+  );
+  emitChange();
+}
+
+function syncArchivedSessions(
+  hostId: string,
+  accountId: string,
+  archivedSessions: ArchivedSessionRecord[],
+): void {
+  const botKey = getBotCacheKey({ hostId, accountId });
+  state = {
+    ...state,
+    archivedSessionsByBot: {
+      ...state.archivedSessionsByBot,
+      [botKey]: archivedSessions,
+    },
+  };
+  emitChange();
+}
+
+function getSessionRecordKey(session: SessionRecord): string {
+  return `${session.hostId}:${session.accountId}:${session.sessionId}`;
+}
+
+function createCommandId(): string {
+  commandSequence += 1;
+  return `cmd-${commandSequence}`;
 }
 
 export function botRouteId(input: { hostId: string; accountId: string }): string {

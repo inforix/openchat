@@ -158,6 +158,13 @@ export default function RootLayout({ children }: RootLayoutProps) {
             margin-bottom: 16px;
           }
 
+          .session-switcher {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+          }
+
           .host-pill,
           .utility-button,
           .action-button {

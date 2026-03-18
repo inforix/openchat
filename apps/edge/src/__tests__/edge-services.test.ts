@@ -565,6 +565,12 @@ describe("edge services", () => {
       activeSessionId: "sess-2",
       resultingSessionId: "sess-2",
       forwarded: false,
+      archivedSessions: [
+        {
+          sessionId: "sess-1",
+          archivedAt: expect.any(String) as string,
+        },
+      ],
     });
     expect(transport.sendCalls).toEqual([]);
   });
@@ -616,6 +622,7 @@ describe("edge services", () => {
       ok: false,
       code: "session_busy",
       activeSessionId: bot.activeSessionId,
+      archivedSessions: [],
     });
 
     streamState.setActive("acct-1", false);
@@ -624,6 +631,7 @@ describe("edge services", () => {
       ok: true,
       activeSessionId: bot.activeSessionId,
       forwarded: true,
+      archivedSessions: [],
     });
   });
 
@@ -659,6 +667,7 @@ describe("edge services", () => {
       ok: true,
       activeSessionId: bot.activeSessionId,
       forwarded: true,
+      archivedSessions: [],
     });
 
     await pendingMicrotasks();
@@ -679,6 +688,7 @@ describe("edge services", () => {
       ok: false,
       code: "session_busy",
       activeSessionId: bot.activeSessionId,
+      archivedSessions: [],
     });
 
     streamState.setActive("acct-1", false);
@@ -700,6 +710,12 @@ describe("edge services", () => {
       activeSessionId: "sess-2",
       resultingSessionId: "sess-2",
       forwarded: false,
+      archivedSessions: [
+        {
+          sessionId: "sess-1",
+          archivedAt: expect.any(String) as string,
+        },
+      ],
     });
   });
 
@@ -748,6 +764,12 @@ describe("edge services", () => {
         nextSession.ok && nextSession.resultingSessionId
           ? nextSession.resultingSessionId
           : null,
+      archivedSessions: [
+        {
+          sessionId: "sess-1",
+          archivedAt: expect.any(String) as string,
+        },
+      ],
     });
     expect(transport.sendCalls).toEqual([]);
   });
@@ -804,6 +826,12 @@ describe("edge services", () => {
         nextSession.ok && nextSession.resultingSessionId
           ? nextSession.resultingSessionId
           : null,
+      archivedSessions: [
+        {
+          sessionId: "sess-1",
+          archivedAt: expect.any(String) as string,
+        },
+      ],
     });
   });
 
@@ -842,6 +870,7 @@ describe("edge services", () => {
       ok: false,
       code: "session_conflict",
       activeSessionId: "sess-foreign",
+      archivedSessions: [],
     });
   });
 

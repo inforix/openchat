@@ -2,7 +2,10 @@ import {
   MessagePayloadSchema,
   type MessagePayload,
 } from "../../../packages/protocol/src/index";
-import { type ActiveSession } from "../../../packages/openclaw-client/src/index";
+import {
+  type ActiveSession,
+  type ArchivedSessionSummary,
+} from "../../../packages/openclaw-client/src/index";
 
 type SessionCommandInput = {
   accountId: string;
@@ -16,15 +19,20 @@ export type SessionSendResult =
       activeSessionId: string;
       resultingSessionId?: string;
       forwarded: boolean;
+      archivedSessions: ArchivedSessionSummary[];
     }
   | {
       ok: false;
       code: "session_busy" | "session_conflict";
       activeSessionId: string | null;
+      archivedSessions: ArchivedSessionSummary[];
     };
 
 export type SessionOpenClawAdapter = {
   getActiveSession(input: { accountId: string }): Promise<ActiveSession | null>;
+  listArchivedSessions(input: {
+    accountId: string;
+  }): Promise<ArchivedSessionSummary[]>;
   createNextSession(input: {
     accountId: string;
     expectedActiveSessionId: string | null;
@@ -89,11 +97,13 @@ const isSessionConflictLike = (
 };
 
 const toConflictResult = (
+  archivedSessions: ArchivedSessionSummary[],
   error: { code: "session_conflict"; activeSessionId: string | null },
 ): SessionSendResult => ({
   ok: false,
   code: "session_conflict",
   activeSessionId: error.activeSessionId,
+  archivedSessions,
 });
 
 export const createSessionService = (
@@ -112,24 +122,36 @@ export const createSessionService = (
       ) {
         return withMutex(mutationLocks, input.accountId, async () => {
           if (await streamState.hasActiveStream({ accountId: input.accountId })) {
-            const activeSession = await openClaw.getActiveSession({
-              accountId: input.accountId,
-            });
+            const [activeSession, archivedSessions] = await Promise.all([
+              openClaw.getActiveSession({
+                accountId: input.accountId,
+              }),
+              openClaw.listArchivedSessions({
+                accountId: input.accountId,
+              }),
+            ]);
             return {
               ok: false,
               code: "session_busy",
               activeSessionId: activeSession?.sessionId ?? null,
+              archivedSessions,
             };
           }
 
           if (input.targetSessionId !== payload.command.expectedActiveSessionId) {
-            const activeSession = await openClaw.getActiveSession({
-              accountId: input.accountId,
-            });
+            const [activeSession, archivedSessions] = await Promise.all([
+              openClaw.getActiveSession({
+                accountId: input.accountId,
+              }),
+              openClaw.listArchivedSessions({
+                accountId: input.accountId,
+              }),
+            ]);
             return {
               ok: false,
               code: "session_conflict",
               activeSessionId: activeSession?.sessionId ?? null,
+              archivedSessions,
             };
           }
 
@@ -140,15 +162,22 @@ export const createSessionService = (
                 payload.command.expectedActiveSessionId,
               commandId: payload.command.commandId,
             });
+            const archivedSessions = await openClaw.listArchivedSessions({
+              accountId: input.accountId,
+            });
             return {
               ok: true,
               activeSessionId: nextSession.sessionId,
               resultingSessionId: nextSession.sessionId,
               forwarded: false,
+              archivedSessions,
             };
           } catch (error) {
             if (isSessionConflictLike(error)) {
-              return toConflictResult(error);
+              const archivedSessions = await openClaw.listArchivedSessions({
+                accountId: input.accountId,
+              });
+              return toConflictResult(archivedSessions, error);
             }
             throw error;
           }
@@ -161,14 +190,21 @@ export const createSessionService = (
           targetSessionId: input.targetSessionId,
           payload,
         });
+        const archivedSessions = await openClaw.listArchivedSessions({
+          accountId: input.accountId,
+        });
         return {
           ok: true,
           activeSessionId: input.targetSessionId,
           forwarded: true,
+          archivedSessions,
         };
       } catch (error) {
         if (isSessionConflictLike(error)) {
-          return toConflictResult(error);
+          const archivedSessions = await openClaw.listArchivedSessions({
+            accountId: input.accountId,
+          });
+          return toConflictResult(archivedSessions, error);
         }
         throw error;
       }
