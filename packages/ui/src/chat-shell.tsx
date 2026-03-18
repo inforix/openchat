@@ -39,7 +39,7 @@ type ChatShellProps = {
   pending: boolean;
   statusMessage: string | null;
   onSelectSession: (sessionId: string) => void;
-  onSubmit: (text: string) => Promise<void>;
+  onSubmit: (text: string) => Promise<boolean>;
 };
 
 export function ChatShell({
@@ -65,8 +65,10 @@ export function ChatShell({
     }
 
     const value = draft;
-    setDraft("");
-    await onSubmit(value);
+    const clearDraft = await onSubmit(value);
+    if (clearDraft) {
+      setDraft("");
+    }
   }
 
   return (

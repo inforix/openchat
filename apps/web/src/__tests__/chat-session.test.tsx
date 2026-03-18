@@ -129,6 +129,7 @@ describe("chat session flow", () => {
     }
     expect(requests[0].payload.command.type).toBe("session.new");
     expect(requests[0].payload.command.expectedActiveSessionId).toBe(bot.activeSessionId);
+    expect(requests[0].targetSessionId).toBe(bot.activeSessionId);
     expect(screen.queryByText("/new")).not.toBeInTheDocument();
 
     deferred.resolve({
@@ -410,6 +411,103 @@ describe("chat session flow", () => {
     await user.click(screen.getByRole("button", { name: /active sess-active/i }));
     expect(await screen.findByText("Current active")).toBeInTheDocument();
     expect(screen.getByLabelText(/message/i)).not.toBeDisabled();
+  });
+
+  it("does not fall back to the active transcript when an archived transcript is unavailable", async () => {
+    const user = userEvent.setup();
+    const bot = createBotRecord("acct-ledger", "agent-ledger", "Ledger Room", "sess-active");
+
+    seedClientProtocol({
+      hosts: [hostAlpha],
+      selectedHostId: hostAlpha.hostId,
+      botsByHost: {
+        [hostAlpha.hostId]: [bot],
+      },
+      sessionsByBot: {
+        [`${hostAlpha.hostId}:${bot.accountId}`]: createSession(
+          hostAlpha.hostId,
+          bot.accountId,
+          bot.activeSessionId,
+          "Current active",
+        ),
+      },
+      archivedSessionsByBot: {
+        [`${hostAlpha.hostId}:${bot.accountId}`]: [
+          {
+            sessionId: "sess-archived",
+            archivedAt: "2026-03-17T10:00:00.000Z",
+          },
+        ],
+      },
+    });
+
+    render(<BotPage hostId={hostAlpha.hostId} botId={bot.botId} />);
+
+    await user.click(screen.getByRole("button", { name: /archived sess-archived/i }));
+
+    expect(screen.queryByText("Current active")).not.toBeInTheDocument();
+    expect(await screen.findByText(/no active session is available/i)).toBeInTheDocument();
+  });
+
+  it("clears stale active transcript state when authoritative refresh returns no active session", async () => {
+    const user = userEvent.setup();
+    const staleBot = createBotRecord("acct-ledger", "agent-ledger", "Ledger Room", "sess-stale");
+
+    seedBotState(
+      staleBot,
+      createSession(hostAlpha.hostId, staleBot.accountId, staleBot.activeSessionId, "Stale active"),
+    );
+    setMessageCommandHandler(async () => ({
+      result: {
+        ok: false,
+        code: "session_conflict",
+        activeSessionId: null,
+        archivedSessions: [
+          {
+            sessionId: staleBot.activeSessionId,
+            archivedAt: "2026-03-18T10:00:00.000Z",
+          },
+        ],
+      },
+    }));
+    setSessionSnapshotLoader(async () => ({
+      bot: createBotRecord(staleBot.accountId, staleBot.agentId, staleBot.title, staleBot.activeSessionId),
+      activeSession: null,
+      archivedSessions: [
+        {
+          sessionId: staleBot.activeSessionId,
+          archivedAt: "2026-03-18T10:00:00.000Z",
+        },
+      ],
+      sessionRecords: {},
+    }));
+
+    render(<BotPage hostId={hostAlpha.hostId} botId={staleBot.botId} />);
+
+    await user.type(screen.getByLabelText(/message/i), "hello stale");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(screen.queryByText("Stale active")).not.toBeInTheDocument();
+    expect(await screen.findByText(/no active session is available/i)).toBeInTheDocument();
+  });
+
+  it("keeps the draft and releases pending state when sending throws", async () => {
+    const user = userEvent.setup();
+    const bot = createBotRecord("acct-ledger", "agent-ledger", "Ledger Room", "sess-active");
+
+    seedBotState(bot, createSession(hostAlpha.hostId, bot.accountId, bot.activeSessionId, "Ready"));
+    setMessageCommandHandler(async () => {
+      throw new Error("transport offline");
+    });
+
+    render(<BotPage hostId={hostAlpha.hostId} botId={bot.botId} />);
+
+    await user.type(screen.getByLabelText(/message/i), "retain draft");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(await screen.findByText(/unable to reach the host/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/message/i)).toHaveValue("retain draft");
+    expect(screen.getByRole("button", { name: /send/i })).not.toBeDisabled();
   });
 });
 

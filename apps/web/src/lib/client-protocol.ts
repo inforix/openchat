@@ -550,10 +550,15 @@ async function refreshSessionState(hostId: string, accountId: string): Promise<v
       ...state.botsByHost,
       [hostId]: nextBots,
     },
-    sessionsByBot: {
-      ...state.sessionsByBot,
-      [botKey]: snapshot.activeSession ?? state.sessionsByBot[botKey],
-    },
+    sessionsByBot:
+      snapshot.activeSession === null
+        ? Object.fromEntries(
+            Object.entries(state.sessionsByBot).filter(([key]) => key !== botKey),
+          )
+        : {
+            ...state.sessionsByBot,
+            [botKey]: snapshot.activeSession,
+          },
     archivedSessionsByBot: {
       ...state.archivedSessionsByBot,
       [botKey]: snapshot.archivedSessions,

@@ -54,40 +54,49 @@ export function BotPage({ hostId, botId }: BotPageProps) {
   const effectiveSessionId =
     selectedSessionId ?? activeSession?.sessionId ?? activeBot.activeSessionId;
   const session =
-    getSessionRecordById(activeHost.hostId, activeBot.accountId, effectiveSessionId) ??
-    activeSession;
+    effectiveSessionId === activeBot.activeSessionId
+      ? activeSession
+      : getSessionRecordById(activeHost.hostId, activeBot.accountId, effectiveSessionId);
   const readOnly = cachedReadOnly(
     sessionState.fromCache,
     activeBot.activeSessionId,
     effectiveSessionId,
   );
 
-  async function handleSubmit(text: string) {
+  async function handleSubmit(text: string): Promise<boolean> {
     setPending(true);
     setStatusMessage(null);
 
-    const result = await sendMessageForBot({
-      hostId: activeHost.hostId,
-      accountId: activeBot.accountId,
-      text,
-    });
+    try {
+      const result = await sendMessageForBot({
+        hostId: activeHost.hostId,
+        accountId: activeBot.accountId,
+        text,
+      });
 
-    setPending(false);
+      if (!result.ok) {
+        if (result.code === "session_conflict") {
+          setStatusMessage("Session moved on the host. Reloaded the authoritative active session.");
+          return false;
+        }
 
-    if (!result.ok) {
-      if (result.code === "session_conflict") {
-        setStatusMessage("Session moved on the host. Reloaded the authoritative active session.");
-        return;
+        if (result.code === "session_busy") {
+          setStatusMessage("The active session is busy. Finish the current stream before /new.");
+          return false;
+        }
+
+        if (result.code === "offline_read_only") {
+          setStatusMessage("Host offline. Cached views are read-only.");
+        }
+        return false;
       }
 
-      if (result.code === "session_busy") {
-        setStatusMessage("The active session is busy. Finish the current stream before /new.");
-        return;
-      }
-
-      if (result.code === "offline_read_only") {
-        setStatusMessage("Host offline. Cached views are read-only.");
-      }
+      return true;
+    } catch {
+      setStatusMessage("Unable to reach the host.");
+      return false;
+    } finally {
+      setPending(false);
     }
   }
 

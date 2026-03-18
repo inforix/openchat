@@ -57,6 +57,16 @@ export type SessionService = {
   handleMessage(input: SessionCommandInput): Promise<SessionSendResult>;
 };
 
+const waitForMutationToFinish = async (
+  locks: Map<string, Promise<void>>,
+  key: string,
+): Promise<void> => {
+  const pending = locks.get(key);
+  if (pending) {
+    await pending;
+  }
+};
+
 const withMutex = async <T>(
   locks: Map<string, Promise<void>>,
   key: string,
@@ -183,6 +193,8 @@ export const createSessionService = (
           }
         });
       }
+
+      await waitForMutationToFinish(mutationLocks, input.accountId);
 
       try {
         await openClaw.sendMessage({

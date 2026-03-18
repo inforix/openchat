@@ -66,6 +66,21 @@ const tempDirs: string[] = [];
 const pendingMicrotasks = async (): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, 0));
 
+const createDeferred = <T>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+
+  return {
+    promise,
+    resolve,
+    reject,
+  };
+};
+
 class FakeRelay {
   readonly registerCalls: Array<{
     hostId: string;
@@ -833,6 +848,81 @@ describe("edge services", () => {
         },
       ],
     });
+  });
+
+  it("serializes /new against concurrent sends on the same account", async () => {
+    const createEdgeMain = await loadCreateEdgeMain();
+    const relay = new FakeRelay();
+    const { adapter, transport, stateDir } = await createOpenClawAdapter();
+    const edge = createEdgeMain({
+      hostId: "host-1",
+      deviceId: "device-1",
+      stateDir,
+      relay,
+      openClaw: adapter,
+      streamState: createStreamState(),
+    });
+    const bot = await edge.createBot({
+      accountId: "acct-1",
+      agentId: "agent-1",
+    });
+    const releaseCreate = createDeferred<void>();
+    const originalCreateNextSession = adapter.createNextSession.bind(adapter);
+    adapter.createNextSession = async (input) => {
+      await releaseCreate.promise;
+      return originalCreateNextSession(input);
+    };
+
+    const newSessionPromise = edge.handleMessage({
+      accountId: "acct-1",
+      targetSessionId: bot.activeSessionId,
+      payload: {
+        kind: "systemCommand",
+        command: {
+          type: "session.new",
+          expectedActiveSessionId: bot.activeSessionId,
+          commandId: "cmd-serialize-new",
+        },
+      },
+    });
+
+    await pendingMicrotasks();
+
+    const staleSendPromise = edge.handleMessage({
+      accountId: "acct-1",
+      targetSessionId: bot.activeSessionId,
+      payload: {
+        kind: "userMessage",
+        text: "should not reach archived session",
+      },
+    });
+
+    releaseCreate.resolve();
+
+    await expect(newSessionPromise).resolves.toEqual({
+      ok: true,
+      activeSessionId: "sess-2",
+      resultingSessionId: "sess-2",
+      forwarded: false,
+      archivedSessions: [
+        {
+          sessionId: "sess-1",
+          archivedAt: expect.any(String) as string,
+        },
+      ],
+    });
+    await expect(staleSendPromise).resolves.toEqual({
+      ok: false,
+      code: "session_conflict",
+      activeSessionId: "sess-2",
+      archivedSessions: [
+        {
+          sessionId: "sess-1",
+          archivedAt: expect.any(String) as string,
+        },
+      ],
+    });
+    expect(transport.sendCalls).toEqual([]);
   });
 
   it("translates structurally-shaped session_conflict errors without relying on class identity", async () => {
