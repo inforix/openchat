@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket as NodeWebSocket } from "ws";
@@ -424,6 +425,134 @@ describe("relay-backed session snapshot loader", () => {
 
       expect(await screen.findByText("Authoritative transcript")).toBeInTheDocument();
       expect(screen.queryByText(/no active session is available/i)).not.toBeInTheDocument();
+    } finally {
+      await edge.close();
+      await server.close();
+    }
+  });
+
+  it("loads an archived transcript over relay after the user selects it", async () => {
+    const user = userEvent.setup();
+    const relayDirectory = await createTempDir();
+    const edgeStateDirectory = await createTempDir();
+    const transport = new FakeOpenClawTransport();
+    const client = createOpenClawClient({
+      hostId: hostAlpha.hostId,
+      deviceId: "device-1",
+      stateDir: edgeStateDirectory,
+      transport,
+    });
+    const adapter = new ConfirmingOpenClawAdapter(client);
+    const bot = await adapter.createOpenChatBot({
+      accountId: "acct-ledger",
+      agentId: "agent-ledger",
+    });
+    const nextSession = await adapter.createNextSession({
+      accountId: bot.accountId,
+      expectedActiveSessionId: bot.activeSessionId,
+      commandId: "cmd-archived-seed",
+    });
+
+    transport.seedSessionTranscript({
+      accountId: bot.accountId,
+      sessionId: nextSession.sessionId,
+      title: `Session ${nextSession.sessionId}`,
+      messages: [
+        {
+          id: `${nextSession.sessionId}-message-1`,
+          role: "assistant",
+          text: "Current transcript",
+        },
+      ],
+    });
+    transport.seedSessionTranscript({
+      accountId: bot.accountId,
+      sessionId: "sess-1",
+      title: "Session sess-1",
+      messages: [
+        {
+          id: "sess-1-message-1",
+          role: "assistant",
+          text: "Archived transcript from host",
+        },
+      ],
+    });
+
+    const store = createRelayStore({
+      filename: join(relayDirectory, "relay.sqlite"),
+    });
+    store.registerDevice({
+      deviceId: "device-1",
+      userId: "user-1",
+      deviceCredential: "credential-1",
+    });
+    store.registerHost({
+      hostId: hostAlpha.hostId,
+      userId: "user-1",
+    });
+    store.bindDeviceToHost({
+      deviceId: "device-1",
+      hostId: hostAlpha.hostId,
+    });
+
+    const relay = createRelayMain({ store });
+    const server = createRelayServer({
+      relay,
+      host: "127.0.0.1",
+      port: 0,
+    });
+    await server.start();
+
+    const edge = createEdgeMain({
+      hostId: hostAlpha.hostId,
+      deviceId: "device-1",
+      stateDir: edgeStateDirectory,
+      relay: createRelayWebSocketClient({
+        relayWebSocketUrl: `${server.baseWebSocketUrl}/relay`,
+      }),
+      openClaw: adapter,
+      streamState: new FakeStreamStateSource(),
+    });
+    await edge.start();
+
+    seedClientProtocol({
+      hosts: [hostAlpha],
+      selectedHostId: hostAlpha.hostId,
+      botsByHost: {
+        [hostAlpha.hostId]: [createBotRecord(bot.accountId, bot.agentId, "Ledger Room", nextSession.sessionId)],
+      },
+      sessionsByBot: {},
+      archivedSessionsByBot: {
+        [`${hostAlpha.hostId}:${bot.accountId}`]: [
+          {
+            sessionId: "sess-1",
+            archivedAt: "2026-03-18T10:00:00.000Z",
+          },
+        ],
+      },
+    });
+    installRelaySessionSnapshotLoader({
+      relayHttpUrl: server.baseHttpUrl,
+      relayWebSocketUrl: `${server.baseWebSocketUrl}/relay`,
+      deviceId: "device-1",
+      deviceCredential: "credential-1",
+      webSocketFactory: (url) => new NodeWebSocket(url),
+    });
+    installRelaySessionHistoryLoader({
+      relayHttpUrl: server.baseHttpUrl,
+      relayWebSocketUrl: `${server.baseWebSocketUrl}/relay`,
+      deviceId: "device-1",
+      deviceCredential: "credential-1",
+      webSocketFactory: (url) => new NodeWebSocket(url),
+    });
+
+    try {
+      render(<BotScreen hostId={hostAlpha.hostId} botId={bot.botId} />);
+
+      await user.click(screen.getByRole("button", { name: /archived sess-1/i }));
+
+      expect(await screen.findByText("Archived transcript from host")).toBeInTheDocument();
+      expect(screen.getByText(/archived sessions are read-only/i)).toBeInTheDocument();
     } finally {
       await edge.close();
       await server.close();
