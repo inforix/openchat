@@ -29,6 +29,7 @@ export type CreateEdgeMainInput = EdgeConfigInput & {
 
 export type EdgeMain = {
   start(): Promise<void>;
+  close(): Promise<void>;
   createPairingResponse(input?: { ttlMs?: number }): Promise<PairingToken>;
   confirmPairing(input: {
     deviceId: string;
@@ -63,10 +64,13 @@ const createRuntime = async (
   input: CreateEdgeMainInput,
 ): Promise<EdgeRuntime> => {
   const config = await createEdgeConfig(input);
+  const botService = createBotService(input.openClaw);
   return {
-    relayTunnel: createRelayTunnel(config, input.relay),
+    relayTunnel: createRelayTunnel(config, input.relay, {
+      listBots: () => botService.listBots(),
+    }),
     pairingService: createPairingService(config),
-    botService: createBotService(input.openClaw),
+    botService,
     sessionService: createSessionService(input.openClaw, input.streamState),
   };
 };
@@ -79,6 +83,11 @@ export const createEdgeMain = (input: CreateEdgeMainInput): EdgeMain => {
     async start(): Promise<void> {
       const services = await runtime;
       await services.relayTunnel.start();
+    },
+
+    async close(): Promise<void> {
+      const services = await runtime;
+      await services.relayTunnel.close();
     },
 
     async createPairingResponse(inputValue): Promise<PairingToken> {

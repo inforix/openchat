@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   BotAccountInputSchema,
+  BotListResultPayloadSchema,
   EdgeBotCreateResultEventSchema,
+  EdgeBotListResultEventSchema,
   EdgeCursorCommitEventSchema,
   EdgeHelloEventSchema,
   EdgeRegisterHostEventSchema,
@@ -242,6 +244,17 @@ describe("relay-edge event protocol", () => {
         archivedSessions: [],
       }).eventType,
     ).toBe("edge.session.snapshot");
+
+    expect(
+      EdgeBotListResultEventSchema.parse({
+        requestId: "req-7",
+        eventId: "evt-7",
+        hostId: "host-1",
+        deviceId: "dev-1",
+        cursor: "cur-7",
+        eventType: "edge.bot.list.result",
+      }).eventType,
+    ).toBe("edge.bot.list.result");
   });
 
   it("requires relay envelope routing headers", () => {
@@ -396,5 +409,23 @@ describe("relay-edge event protocol", () => {
         transcript: ["x"],
       }),
     ).toThrow();
+  });
+
+  it("models decrypted bot-list payloads as openchat bot arrays", () => {
+    expect(
+      BotListResultPayloadSchema.parse({
+        type: "bot.list.result",
+        bots: [
+          {
+            hostId: "host-1",
+            accountId: "acct-1",
+            agentId: "agent-1",
+            activeSessionId: "sess-1",
+            channelType: "openchat",
+            botId: "host-1:acct-1",
+          },
+        ],
+      }).bots,
+    ).toHaveLength(1);
   });
 });

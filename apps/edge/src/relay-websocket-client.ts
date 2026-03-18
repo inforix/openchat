@@ -105,6 +105,7 @@ export const createRelayWebSocketClient = (
   input: CreateRelayWebSocketClientInput,
 ): RelayWebSocketClient => {
   let socket: WebSocket | null = null;
+  let closed = false;
   const requestQueue: RelayClientBotListRequest[] = [];
   const pendingTakeResolvers: Array<
     (requests: RelayClientBotListRequest[]) => void
@@ -125,11 +126,18 @@ export const createRelayWebSocketClient = (
     resolve?.(drainQueuedRequests());
   };
 
+  const resolveAllPendingTakes = (): void => {
+    while (pendingTakeResolvers.length > 0) {
+      pendingTakeResolvers.shift()?.([]);
+    }
+  };
+
   return {
     async registerEdge(registration): Promise<void> {
       if (socket && socket.readyState !== WebSocket.CLOSED) {
         throw new Error("relay websocket client is already registered");
       }
+      closed = false;
 
       const url = new URL(input.relayWebSocketUrl);
       url.searchParams.set("role", "edge");
@@ -142,6 +150,10 @@ export const createRelayWebSocketClient = (
       );
 
       socket = new WebSocket(url);
+      socket.on("close", () => {
+        closed = true;
+        resolveAllPendingTakes();
+      });
       socket.on("message", (raw) => {
         let payload: unknown;
         try {
@@ -162,6 +174,10 @@ export const createRelayWebSocketClient = (
     },
 
     async takeClientRequests(): Promise<RelayClientBotListRequest[]> {
+      if (closed) {
+        return [];
+      }
+
       if (requestQueue.length > 0) {
         return drainQueuedRequests();
       }
@@ -181,11 +197,15 @@ export const createRelayWebSocketClient = (
 
     async close(): Promise<void> {
       if (!socket) {
+        closed = true;
+        resolveAllPendingTakes();
         return;
       }
 
       const current = socket;
       socket = null;
+      closed = true;
+      resolveAllPendingTakes();
       current.close();
       await waitForClosed(current);
     },
