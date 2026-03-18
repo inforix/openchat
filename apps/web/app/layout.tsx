@@ -1,4 +1,8 @@
+"use client";
+
 import React, { type ReactNode } from "react";
+
+import { OpenChatE2EHarness } from "../src/lib/e2e-harness";
 
 type RootLayoutProps = {
   children: ReactNode;
@@ -9,6 +13,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
     <html lang="en">
       <body>
         <div className="site-frame">{children}</div>
+        {process.env.NEXT_PUBLIC_OPENCHAT_E2E === "1" ? <OpenChatE2EHarness /> : null}
         <style jsx global>{`
           :root {
             color-scheme: light;

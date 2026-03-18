@@ -8,10 +8,6 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { BotPage } from "../../app/hosts/[hostId]/bots/[botId]/page";
-import { NewBotPage } from "../../app/hosts/[hostId]/bots/new/page";
-import { PairingScreen } from "../../app/pair/page";
-import { HomeScreen } from "../../app/page";
 import {
   resetClientProtocol,
   seedClientProtocol,
@@ -27,6 +23,10 @@ import {
   cacheHostBotsSnapshot,
   clearOfflineCache,
 } from "../lib/offline-cache";
+import { BotScreen } from "../screens/bot-screen";
+import { HomeScreen } from "../screens/home-screen";
+import { NewBotScreen } from "../screens/new-bot-screen";
+import { PairingScreen } from "../screens/pairing-screen";
 
 const hostAlpha = createHost({
   hostId: "host-alpha",
@@ -169,7 +169,7 @@ describe("web client shell", () => {
       sessionsByBot: {},
     });
 
-    render(<NewBotPage hostId={hostAlpha.hostId} />);
+    render(<NewBotScreen hostId={hostAlpha.hostId} />);
 
     await user.type(screen.getByLabelText(/account id/i), "acct-journal");
     await user.type(screen.getByLabelText(/agent id/i), "agent-writer");
@@ -210,7 +210,7 @@ describe("web client shell", () => {
       sessionsByBot: {},
     });
 
-    render(<NewBotPage hostId={hostAlpha.hostId} />);
+    render(<NewBotScreen hostId={hostAlpha.hostId} />);
 
     await user.type(screen.getByLabelText(/account id/i), "acct-failed");
     await user.type(screen.getByLabelText(/agent id/i), "agent-missing");
@@ -243,7 +243,7 @@ describe("web client shell", () => {
       },
     });
 
-    render(<BotPage hostId={hostAlpha.hostId} botId={bot.botId} />);
+    render(<BotScreen hostId={hostAlpha.hostId} botId={bot.botId} />);
 
     expect(screen.getByText("Current active exchange")).toBeInTheDocument();
     expect(screen.getByText(/active session sess-current/i)).toBeInTheDocument();
@@ -276,7 +276,7 @@ describe("web client shell", () => {
       cachedSession,
     );
 
-    render(<BotPage hostId={offlineHost.hostId} botId={bot.botId} />);
+    render(<BotScreen hostId={offlineHost.hostId} botId={bot.botId} />);
 
     expect(screen.getByText(/offline snapshot/i)).toBeInTheDocument();
     expect(screen.getByText(/read-only/i)).toBeInTheDocument();

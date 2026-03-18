@@ -97,6 +97,7 @@ type MessageCommandHandlerResult = {
 };
 
 const listeners = new Set<() => void>();
+const E2E_PROTOCOL_STORAGE_KEY = "__openchat_e2e_protocol_seed";
 
 let state: ProtocolState = {
   hosts: [],
@@ -205,6 +206,7 @@ export function seedClientProtocol(input: ProtocolSeed): void {
     archivedSessionsByBot: { ...(input.archivedSessionsByBot ?? {}) },
     sessionRecordsById,
   };
+  persistProtocolState();
   emitChange();
 }
 
@@ -247,6 +249,7 @@ export function resetClientProtocol(): void {
   sessionSnapshotLoader = createDefaultSessionSnapshotLoader();
   pendingNewSessionCommands.clear();
   commandSequence = 0;
+  clearPersistedProtocolState();
   emitChange();
 }
 
@@ -277,7 +280,10 @@ export function setSessionSnapshotLoader(
 export function useClientShell(requestedHostId?: string) {
   const [snapshot, setSnapshot] = useState<ProtocolState>(() => getSnapshot());
 
-  useEffect(() => subscribe(() => setSnapshot(getSnapshot())), []);
+  useEffect(() => {
+    setSnapshot(getSnapshot());
+    return subscribe(() => setSnapshot(getSnapshot()));
+  }, []);
   const selectedHostId =
     requestedHostId ?? snapshot.selectedHostId ?? snapshot.hosts[0]?.hostId ?? null;
   const host = selectedHostId ? findHost(selectedHostId, snapshot) : null;
@@ -307,6 +313,7 @@ export function selectHost(hostId: string): void {
     ...state,
     selectedHostId: hostId,
   };
+  persistProtocolState();
   emitChange();
 }
 
@@ -352,6 +359,7 @@ export async function createBotForHost(input: {
       [input.hostId]: [...existingBots, result.bot],
     },
   };
+  persistProtocolState();
   cacheHostBotsSnapshot(input.hostId, state.botsByHost[input.hostId]);
   emitChange();
   return result;
@@ -395,6 +403,7 @@ export async function reconnectHost(hostId: string): Promise<void> {
     },
   };
 
+  persistProtocolState();
   cacheHostBotsSnapshot(hostId, snapshot.bots);
   emitChange();
 }
@@ -566,6 +575,7 @@ async function refreshSessionState(hostId: string, accountId: string): Promise<v
     sessionRecordsById,
   };
 
+  persistProtocolState();
   cacheHostBotsSnapshot(hostId, nextBots);
   emitChange();
 }
@@ -643,6 +653,7 @@ function appendConfirmedUserMessage(
 }
 
 function getSnapshot(): ProtocolState {
+  hydrateProtocolStateFromStorage();
   return state;
 }
 
@@ -761,6 +772,7 @@ function updateSessionRecord(
     sessionRecordsById,
   };
 
+  persistProtocolState();
   cacheBotSessionSnapshot(
     {
       hostId,
@@ -784,6 +796,7 @@ function syncArchivedSessions(
       [botKey]: archivedSessions,
     },
   };
+  persistProtocolState();
   emitChange();
 }
 
@@ -798,4 +811,38 @@ function createCommandId(): string {
 
 export function botRouteId(input: { hostId: string; accountId: string }): string {
   return deriveBotId(input);
+}
+
+function persistProtocolState(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.sessionStorage.setItem(E2E_PROTOCOL_STORAGE_KEY, JSON.stringify(state));
+}
+
+function clearPersistedProtocolState(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.sessionStorage.removeItem(E2E_PROTOCOL_STORAGE_KEY);
+}
+
+function hydrateProtocolStateFromStorage(): void {
+  if (
+    typeof window === "undefined" ||
+    state.hosts.length > 0 ||
+    state.selectedHostId !== null
+  ) {
+    return;
+  }
+
+  const raw = window.sessionStorage.getItem(E2E_PROTOCOL_STORAGE_KEY);
+
+  if (!raw) {
+    return;
+  }
+
+  state = JSON.parse(raw) as ProtocolState;
 }

@@ -8,7 +8,6 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { BotPage } from "../../app/hosts/[hostId]/bots/[botId]/page";
 import {
   resetClientProtocol,
   seedClientProtocol,
@@ -19,6 +18,7 @@ import {
   type HostRecord,
   type SessionRecord,
 } from "../lib/client-protocol";
+import { BotScreen } from "../screens/bot-screen";
 
 const hostAlpha = createHost({
   hostId: "host-alpha",
@@ -55,7 +55,7 @@ describe("chat session flow", () => {
       };
     });
 
-    render(<BotPage hostId={hostAlpha.hostId} botId={bot.botId} />);
+    render(<BotScreen hostId={hostAlpha.hostId} botId={bot.botId} />);
 
     await user.type(screen.getByLabelText(/message/i), "hello active");
     await user.click(screen.getByRole("button", { name: /send/i }));
@@ -117,7 +117,7 @@ describe("chat session flow", () => {
       },
     }));
 
-    render(<BotPage hostId={hostAlpha.hostId} botId={bot.botId} />);
+    render(<BotScreen hostId={hostAlpha.hostId} botId={bot.botId} />);
 
     await user.type(screen.getByLabelText(/message/i), "/new");
     await user.click(screen.getByRole("button", { name: /send/i }));
@@ -188,7 +188,7 @@ describe("chat session flow", () => {
       },
     }));
 
-    render(<BotPage hostId={hostAlpha.hostId} botId={bot.botId} />);
+    render(<BotScreen hostId={hostAlpha.hostId} botId={bot.botId} />);
 
     await user.type(screen.getByLabelText(/message/i), "/new");
     await user.click(screen.getByRole("button", { name: /send/i }));
@@ -307,7 +307,7 @@ describe("chat session flow", () => {
       },
     }));
 
-    render(<BotPage hostId={hostAlpha.hostId} botId={staleBot.botId} />);
+    render(<BotScreen hostId={hostAlpha.hostId} botId={staleBot.botId} />);
 
     await user.type(screen.getByLabelText(/message/i), "hello stale");
     await user.click(screen.getByRole("button", { name: /send/i }));
@@ -355,7 +355,7 @@ describe("chat session flow", () => {
     });
     setMessageCommandHandler(handler);
 
-    render(<BotPage hostId={hostAlpha.hostId} botId={bot.botId} />);
+    render(<BotScreen hostId={hostAlpha.hostId} botId={bot.botId} />);
 
     await user.click(screen.getByRole("button", { name: /archived sess-archived/i }));
 
@@ -403,7 +403,7 @@ describe("chat session flow", () => {
       },
     });
 
-    render(<BotPage hostId={hostAlpha.hostId} botId={bot.botId} />);
+    render(<BotScreen hostId={hostAlpha.hostId} botId={bot.botId} />);
 
     await user.click(screen.getByRole("button", { name: /archived sess-archived/i }));
     expect(await screen.findByText("Archived transcript")).toBeInTheDocument();
@@ -441,7 +441,7 @@ describe("chat session flow", () => {
       },
     });
 
-    render(<BotPage hostId={hostAlpha.hostId} botId={bot.botId} />);
+    render(<BotScreen hostId={hostAlpha.hostId} botId={bot.botId} />);
 
     await user.click(screen.getByRole("button", { name: /archived sess-archived/i }));
 
@@ -482,7 +482,7 @@ describe("chat session flow", () => {
       sessionRecords: {},
     }));
 
-    render(<BotPage hostId={hostAlpha.hostId} botId={staleBot.botId} />);
+    render(<BotScreen hostId={hostAlpha.hostId} botId={staleBot.botId} />);
 
     await user.type(screen.getByLabelText(/message/i), "hello stale");
     await user.click(screen.getByRole("button", { name: /send/i }));
@@ -500,7 +500,7 @@ describe("chat session flow", () => {
       throw new Error("transport offline");
     });
 
-    render(<BotPage hostId={hostAlpha.hostId} botId={bot.botId} />);
+    render(<BotScreen hostId={hostAlpha.hostId} botId={bot.botId} />);
 
     await user.type(screen.getByLabelText(/message/i), "retain draft");
     await user.click(screen.getByRole("button", { name: /send/i }));
