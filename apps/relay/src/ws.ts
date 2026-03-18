@@ -2,7 +2,11 @@ import type { RelayStore } from "../../../packages/store/src/index";
 
 import type { RelayAuth } from "./auth";
 import type { RelayBufferedEvent, RelayEventBuffer } from "./buffer";
-import type { ClientBotListRequest, HostAwareRouter } from "./router";
+import type {
+  ClientBotListRequest,
+  ClientHostRequest,
+  HostAwareRouter,
+} from "./router";
 
 export type ClientConnection = {
   session: {
@@ -10,6 +14,7 @@ export type ClientConnection = {
     hostId: string;
   };
   requestBotList(input: { requestId: string }): void;
+  requestSessionSnapshot(input: { requestId: string; accountId: string }): void;
   replayFromCursor(cursor: string): RelayBufferedEvent[];
   takeEvents(): RelayBufferedEvent[];
   disconnect(): void;
@@ -26,7 +31,7 @@ export type EdgeConnection = {
     eventType: string;
     encryptedPayload: string;
   }): RelayBufferedEvent;
-  takeClientRequests(): ClientBotListRequest[];
+  takeClientRequests(): ClientHostRequest[];
   disconnect(): void;
 };
 
@@ -92,6 +97,15 @@ export const createRelayWsService = (
             hostId: session.hostId,
           });
         },
+        requestSessionSnapshot(request) {
+          input.router.routeSessionSnapshotRequest({
+            type: "client.session.snapshot.request",
+            requestId: request.requestId,
+            deviceId: session.deviceId,
+            hostId: session.hostId,
+            accountId: request.accountId,
+          });
+        },
         replayFromCursor(cursor) {
           return input.buffer.replay({
             deviceId: session.deviceId,
@@ -111,7 +125,7 @@ export const createRelayWsService = (
     },
 
     connectEdge(payload) {
-      const clientRequests: ClientBotListRequest[] = [];
+      const clientRequests: ClientHostRequest[] = [];
       const detach = input.router.attachHost(payload.hostId, (request) => {
         clientRequests.push(request);
       });

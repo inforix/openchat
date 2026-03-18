@@ -3,7 +3,11 @@
 import { ChatShell } from "@openchat/ui";
 import React, { useEffect, useState } from "react";
 
-import { useClientShell } from "../lib/client-protocol";
+import {
+  shouldAutoSyncSessionSnapshots,
+  syncSessionForBot,
+  useClientShell,
+} from "../lib/client-protocol";
 
 type BotScreenProps = {
   hostId?: string;
@@ -30,6 +34,19 @@ export function BotScreen({ hostId, botId }: BotScreenProps) {
     }
   }, [bot?.activeSessionId]);
 
+  useEffect(() => {
+    if (
+      !host ||
+      !bot ||
+      host.status !== "online" ||
+      !shouldAutoSyncSessionSnapshots()
+    ) {
+      return;
+    }
+
+    void syncSessionForBot(host.hostId, bot.accountId).catch(() => {});
+  }, [bot?.accountId, host?.hostId, host?.status]);
+
   if (!host || !botId) {
     return (
       <main className="screen-shell">
@@ -51,8 +68,13 @@ export function BotScreen({ hostId, botId }: BotScreenProps) {
   const sessionState = getSessionForBot(activeHost.hostId, activeBot.accountId);
   const archivedSessions = getArchivedSessionsForBot(activeHost.hostId, activeBot.accountId);
   const activeSession = sessionState.session;
+  const selectedSessionStillVisible =
+    selectedSessionId === activeBot.activeSessionId ||
+    archivedSessions.some((session) => session.sessionId === selectedSessionId);
   const effectiveSessionId =
-    selectedSessionId ?? activeSession?.sessionId ?? activeBot.activeSessionId;
+    selectedSessionId && selectedSessionStillVisible
+      ? selectedSessionId
+      : activeSession?.sessionId ?? activeBot.activeSessionId;
   const session =
     effectiveSessionId === activeBot.activeSessionId
       ? activeSession

@@ -17,6 +17,12 @@ type ClientBotListRequestMessage = {
   requestId: string;
 };
 
+type ClientSessionSnapshotRequestMessage = {
+  type: "client.session.snapshot.request";
+  requestId: string;
+  accountId: string;
+};
+
 type EdgePublishEncryptedEventMessage = {
   type: "edge.publish.encrypted.event";
   requestId: string;
@@ -77,6 +83,21 @@ const isClientBotListRequestMessage = (
   return (
     candidate.type === "client.bot.list.request" &&
     typeof candidate.requestId === "string"
+  );
+};
+
+const isClientSessionSnapshotRequestMessage = (
+  value: unknown,
+): value is ClientSessionSnapshotRequestMessage => {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.type === "client.session.snapshot.request" &&
+    typeof candidate.requestId === "string" &&
+    typeof candidate.accountId === "string"
   );
 };
 
@@ -201,17 +222,32 @@ export const createRelayServer = (
         return;
       }
 
-      if (!isClientBotListRequestMessage(payload)) {
-        closeForProtocolError(socket, "unsupported client message");
+      if (isClientBotListRequestMessage(payload)) {
+        connection.requestBotList({
+          requestId: payload.requestId,
+        });
+        const edgePeer = edgePeers.get(connection.session.hostId);
+        if (edgePeer) {
+          flushEdgePeer(edgePeer);
+        }
         return;
       }
 
-      connection.requestBotList({
-        requestId: payload.requestId,
-      });
-      const edgePeer = edgePeers.get(connection.session.hostId);
-      if (edgePeer) {
-        flushEdgePeer(edgePeer);
+      if (isClientSessionSnapshotRequestMessage(payload)) {
+        connection.requestSessionSnapshot({
+          requestId: payload.requestId,
+          accountId: payload.accountId,
+        });
+        const edgePeer = edgePeers.get(connection.session.hostId);
+        if (edgePeer) {
+          flushEdgePeer(edgePeer);
+        }
+        return;
+      }
+
+      if (!isClientBotListRequestMessage(payload)) {
+        closeForProtocolError(socket, "unsupported client message");
+        return;
       }
     });
 

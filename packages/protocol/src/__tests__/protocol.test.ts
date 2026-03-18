@@ -8,6 +8,7 @@ import {
   EdgeHelloEventSchema,
   EdgeRegisterHostEventSchema,
   EdgeSessionSnapshotEventSchema,
+  SessionSnapshotResultPayloadSchema,
   EdgeStreamEventSchema,
   MessageSendRequestSchema,
   ProtocolErrorCodeSchema,
@@ -255,6 +256,17 @@ describe("relay-edge event protocol", () => {
         eventType: "edge.bot.list.result",
       }).eventType,
     ).toBe("edge.bot.list.result");
+
+    expect(
+      RelayEventEnvelopeSchema.parse({
+        requestId: "req-8",
+        eventId: "evt-8",
+        hostId: "host-1",
+        deviceId: "dev-1",
+        cursor: "cur-8",
+        eventType: "edge.session.snapshot.result",
+      }).eventType,
+    ).toBe("edge.session.snapshot.result");
   });
 
   it("requires relay envelope routing headers", () => {
@@ -427,5 +439,16 @@ describe("relay-edge event protocol", () => {
         ],
       }).bots,
     ).toHaveLength(1);
+  });
+
+  it("models decrypted session snapshot payloads with nullable active session ids", () => {
+    expect(
+      SessionSnapshotResultPayloadSchema.parse({
+        type: "session.snapshot.result",
+        accountId: "acct-1",
+        activeSessionId: null,
+        archivedSessions: [],
+      }).type,
+    ).toBe("session.snapshot.result");
   });
 });

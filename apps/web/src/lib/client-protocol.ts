@@ -5,9 +5,14 @@ import type {
   MessageSendRequest,
   MessageSendResult,
   ProtocolErrorCode,
+  SessionSnapshotResultPayload,
   StreamEvent,
 } from "@openchat/protocol";
-import { BotListResultPayloadSchema, deriveBotId } from "@openchat/protocol";
+import {
+  BotListResultPayloadSchema,
+  deriveBotId,
+  SessionSnapshotResultPayloadSchema,
+} from "@openchat/protocol";
 import { useEffect, useState } from "react";
 
 import {
@@ -105,6 +110,8 @@ type RelayBotListEventMessage = {
     encryptedPayload: string;
   };
 };
+
+type RelaySessionSnapshotEventMessage = RelayBotListEventMessage;
 
 type RelayHostSnapshotLoaderOptions = {
   relayHttpUrl: string;
@@ -214,6 +221,7 @@ let sessionSnapshotLoader: (
   hostId: string,
   accountId: string,
 ) => Promise<SessionSnapshotRecord> = createDefaultSessionSnapshotLoader();
+let relaySessionSnapshotAutoSyncEnabled = false;
 
 const pendingNewSessionCommands = new Map<string, Promise<MessageSendResult>>();
 let commandSequence = 0;
@@ -277,6 +285,7 @@ export function resetClientProtocol(): void {
     sessionRecordsById: {},
   });
   sessionSnapshotLoader = createDefaultSessionSnapshotLoader();
+  relaySessionSnapshotAutoSyncEnabled = false;
   pendingNewSessionCommands.clear();
   commandSequence = 0;
   clearPersistedProtocolState();
@@ -369,6 +378,78 @@ export function installRelayHostSnapshotLoader(
   });
 }
 
+export function installRelaySessionSnapshotLoader(
+  input: RelayHostSnapshotLoaderOptions,
+): void {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const requestTimeoutMs = input.requestTimeoutMs ?? 5_000;
+  const webSocketFactory =
+    input.webSocketFactory ??
+    ((url: string) => {
+      if (typeof WebSocket === "undefined") {
+        throw new Error("WebSocket is not available in this environment.");
+      }
+      return new WebSocket(url);
+    });
+
+  const loader = async (hostId: string, accountId: string) => {
+    const fallbackSnapshot = await createDefaultSessionSnapshotLoader()(hostId, accountId);
+
+    try {
+      const authResponse = await fetchImpl(`${input.relayHttpUrl}/auth/bootstrap`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          deviceId: input.deviceId,
+          hostId,
+          deviceCredential: input.deviceCredential,
+        }),
+      });
+      const auth = (await authResponse.json()) as {
+        ok: boolean;
+        sessionToken?: string;
+      };
+
+      if (!authResponse.ok || !auth.ok || !auth.sessionToken) {
+        return fallbackSnapshot;
+      }
+
+      const requestId = `relay-session-snapshot-${hostId}-${accountId}-${createCommandId()}`;
+      const socket = webSocketFactory(
+        `${input.relayWebSocketUrl}?role=client&sessionToken=${encodeURIComponent(auth.sessionToken)}`,
+      ) as RelayWebSocketLike;
+      const payload = await requestRelaySessionSnapshot({
+        socket,
+        requestId,
+        accountId,
+        timeoutMs: requestTimeoutMs,
+      });
+      const currentSession = getSessionForBot(hostId, accountId);
+      const nextActiveSessionId = payload.activeSessionId ?? fallbackSnapshot.bot.activeSessionId;
+
+      return {
+        bot: {
+          ...fallbackSnapshot.bot,
+          activeSessionId: nextActiveSessionId,
+        },
+        activeSession:
+          currentSession.session?.sessionId === payload.activeSessionId
+            ? currentSession.session
+            : null,
+        archivedSessions: payload.archivedSessions,
+        sessionRecords: fallbackSnapshot.sessionRecords,
+      };
+    } catch {
+      return fallbackSnapshot;
+    }
+  };
+
+  setSessionSnapshotLoader(loader);
+  relaySessionSnapshotAutoSyncEnabled = true;
+}
+
 export function setMessageCommandHandler(
   handler: (request: MessageSendRequest) => Promise<MessageCommandHandlerResult>,
 ): void {
@@ -379,6 +460,11 @@ export function setSessionSnapshotLoader(
   loader: (hostId: string, accountId: string) => Promise<SessionSnapshotRecord>,
 ): void {
   sessionSnapshotLoader = loader;
+  relaySessionSnapshotAutoSyncEnabled = false;
+}
+
+export function shouldAutoSyncSessionSnapshots(): boolean {
+  return relaySessionSnapshotAutoSyncEnabled;
 }
 
 export function useClientShell(requestedHostId?: string) {
@@ -510,6 +596,13 @@ export async function reconnectHost(hostId: string): Promise<void> {
   persistProtocolState();
   cacheHostBotsSnapshot(hostId, snapshot.bots);
   emitChange();
+}
+
+export async function syncSessionForBot(
+  hostId: string,
+  accountId: string,
+): Promise<void> {
+  await refreshSessionState(hostId, accountId);
 }
 
 export async function sendMessageForBot(input: {
@@ -1012,6 +1105,96 @@ async function requestRelayBotList(input: {
       JSON.stringify({
         type: "client.bot.list.request",
         requestId: input.requestId,
+      }),
+    );
+  });
+}
+
+async function requestRelaySessionSnapshot(input: {
+  socket: RelayWebSocketLike;
+  requestId: string;
+  accountId: string;
+  timeoutMs: number;
+}): Promise<SessionSnapshotResultPayload> {
+  const socket = input.socket;
+  await waitForSocketOpen(socket);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = window.setTimeout(() => {
+      finish(() => {
+        socket.close();
+        reject(new Error("Relay session snapshot request timed out."));
+      });
+    }, input.timeoutMs);
+
+    const finish = (action: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timeout);
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      action();
+    };
+
+    socket.onmessage = (event) => {
+      let payload: RelaySessionSnapshotEventMessage;
+      try {
+        payload = JSON.parse(readSocketDataAsText(event.data)) as RelaySessionSnapshotEventMessage;
+      } catch {
+        return;
+      }
+
+      if (
+        payload.type !== "relay.encrypted.event" ||
+        payload.event.requestId !== input.requestId ||
+        payload.event.eventType !== "edge.session.snapshot.result"
+      ) {
+        return;
+      }
+
+      try {
+        const sessionSnapshotPayload = SessionSnapshotResultPayloadSchema.parse(
+          JSON.parse(payload.event.encryptedPayload) as SessionSnapshotResultPayload,
+        );
+
+        if (sessionSnapshotPayload.accountId !== input.accountId) {
+          throw new Error("Relay session snapshot account mismatch.");
+        }
+
+        finish(() => {
+          socket.close();
+          resolve(sessionSnapshotPayload);
+        });
+      } catch (error) {
+        finish(() => {
+          socket.close();
+          reject(error);
+        });
+      }
+    };
+
+    socket.onerror = () => {
+      finish(() => {
+        socket.close();
+        reject(new Error("Unable to reach relay websocket."));
+      });
+    };
+
+    socket.onclose = () => {
+      finish(() => {
+        reject(new Error("Relay websocket closed before session snapshot arrived."));
+      });
+    };
+
+    socket.send(
+      JSON.stringify({
+        type: "client.session.snapshot.request",
+        requestId: input.requestId,
+        accountId: input.accountId,
       }),
     );
   });

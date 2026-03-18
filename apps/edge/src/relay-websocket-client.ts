@@ -9,9 +9,21 @@ export type RelayClientBotListRequest = {
   hostId: string;
 };
 
+export type RelayClientSessionSnapshotRequest = {
+  type: "client.session.snapshot.request";
+  requestId: string;
+  deviceId: string;
+  hostId: string;
+  accountId: string;
+};
+
+export type RelayClientRequest =
+  | RelayClientBotListRequest
+  | RelayClientSessionSnapshotRequest;
+
 export type RelayWebSocketClient = {
   registerEdge(input: RelayRegistration): Promise<void>;
-  takeClientRequests(): Promise<RelayClientBotListRequest[]>;
+  takeClientRequests(): Promise<RelayClientRequest[]>;
   publishEncryptedEvent(input: {
     requestId: string;
     eventId: string;
@@ -50,6 +62,23 @@ const isClientBotListRequest = (
     typeof candidate.requestId === "string" &&
     typeof candidate.deviceId === "string" &&
     typeof candidate.hostId === "string"
+  );
+};
+
+const isClientSessionSnapshotRequest = (
+  value: unknown,
+): value is RelayClientSessionSnapshotRequest => {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.type === "client.session.snapshot.request" &&
+    typeof candidate.requestId === "string" &&
+    typeof candidate.deviceId === "string" &&
+    typeof candidate.hostId === "string" &&
+    typeof candidate.accountId === "string"
   );
 };
 
@@ -106,12 +135,12 @@ export const createRelayWebSocketClient = (
 ): RelayWebSocketClient => {
   let socket: WebSocket | null = null;
   let closed = false;
-  const requestQueue: RelayClientBotListRequest[] = [];
+  const requestQueue: RelayClientRequest[] = [];
   const pendingTakeResolvers: Array<
-    (requests: RelayClientBotListRequest[]) => void
+    (requests: RelayClientRequest[]) => void
   > = [];
 
-  const drainQueuedRequests = (): RelayClientBotListRequest[] => {
+  const drainQueuedRequests = (): RelayClientRequest[] => {
     const requests = [...requestQueue];
     requestQueue.length = 0;
     return requests;
@@ -162,7 +191,7 @@ export const createRelayWebSocketClient = (
           return;
         }
 
-        if (!isClientBotListRequest(payload)) {
+        if (!isClientBotListRequest(payload) && !isClientSessionSnapshotRequest(payload)) {
           return;
         }
 
@@ -173,7 +202,7 @@ export const createRelayWebSocketClient = (
       await waitForOpen(socket);
     },
 
-    async takeClientRequests(): Promise<RelayClientBotListRequest[]> {
+    async takeClientRequests(): Promise<RelayClientRequest[]> {
       if (closed) {
         return [];
       }

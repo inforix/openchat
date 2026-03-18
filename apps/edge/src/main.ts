@@ -68,6 +68,18 @@ const createRuntime = async (
   return {
     relayTunnel: createRelayTunnel(config, input.relay, {
       listBots: () => botService.listBots(),
+      getSessionSnapshot: async ({ accountId }) => {
+        const [activeSession, archivedSessions] = await Promise.all([
+          input.openClaw.getActiveSession({ accountId }),
+          input.openClaw.listArchivedSessions({ accountId }),
+        ]);
+
+        return {
+          accountId,
+          activeSessionId: activeSession?.sessionId ?? null,
+          archivedSessions,
+        };
+      },
     }),
     pairingService: createPairingService(config),
     botService,

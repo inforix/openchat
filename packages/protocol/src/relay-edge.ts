@@ -44,6 +44,7 @@ export const EdgeEventTypeSchema = z.enum([
   "edge.bot.create.result",
   "edge.bot.list.result",
   "edge.session.snapshot",
+  "edge.session.snapshot.result",
 ]);
 export type EdgeEventType = z.infer<typeof EdgeEventTypeSchema>;
 
@@ -119,6 +120,14 @@ export type EdgeBotListResultEvent = z.infer<
   typeof EdgeBotListResultEventSchema
 >;
 
+export const EdgeSessionSnapshotResultEventSchema =
+  RelayVisibleMetadataSchema.extend({
+    eventType: z.literal("edge.session.snapshot.result"),
+  }).strict();
+export type EdgeSessionSnapshotResultEvent = z.infer<
+  typeof EdgeSessionSnapshotResultEventSchema
+>;
+
 export const EdgeSessionSnapshotEventSchema = RelayVisibleMetadataSchema.extend({
   eventType: z.literal("edge.session.snapshot"),
   accountId: AccountIdSchema,
@@ -155,6 +164,18 @@ export const BotListResultPayloadSchema = z
   .strict();
 export type BotListResultPayload = z.infer<typeof BotListResultPayloadSchema>;
 
+export const SessionSnapshotResultPayloadSchema = z
+  .object({
+    type: z.literal("session.snapshot.result"),
+    accountId: AccountIdSchema,
+    activeSessionId: SessionIdSchema.nullable(),
+    archivedSessions: z.array(ArchivedSessionSummarySchema),
+  })
+  .strict();
+export type SessionSnapshotResultPayload = z.infer<
+  typeof SessionSnapshotResultPayloadSchema
+>;
+
 export const RelayEventEnvelopeSchema = z.union([
   EdgeHelloEventSchema,
   EdgeRegisterHostEventSchema,
@@ -164,5 +185,6 @@ export const RelayEventEnvelopeSchema = z.union([
   EdgeBotCreateResultFailureEventSchema,
   EdgeBotListResultEventSchema,
   EdgeSessionSnapshotEventSchema,
+  EdgeSessionSnapshotResultEventSchema,
 ]);
 export type RelayEventEnvelope = z.infer<typeof RelayEventEnvelopeSchema>;

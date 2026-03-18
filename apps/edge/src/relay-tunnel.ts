@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import {
   BotListResultPayloadSchema,
+  SessionSnapshotResultPayloadSchema,
   type BotAccount,
 } from "../../../packages/protocol/src/index";
+import type { ArchivedSessionSummary } from "../../../packages/openclaw-client/src/index";
 
 import type { EdgeConfig } from "./config";
 
@@ -22,6 +24,12 @@ export type RelayClient = {
       requestId: string;
       deviceId: string;
       hostId: string;
+    } | {
+      type: "client.session.snapshot.request";
+      requestId: string;
+      deviceId: string;
+      hostId: string;
+      accountId: string;
     }>
   >;
   publishEncryptedEvent?(input: {
@@ -42,6 +50,13 @@ export type RelayTunnel = {
 
 type RelayTunnelHandlers = {
   listBots(): Promise<BotAccount[]>;
+  getSessionSnapshot(input: {
+    accountId: string;
+  }): Promise<{
+    accountId: string;
+    activeSessionId: string | null;
+    archivedSessions: ArchivedSessionSummary[];
+  }>;
 };
 
 const supportsBotListTransport = (
@@ -98,11 +113,32 @@ export const createRelayTunnel = (
           continue;
         }
 
-        const bots = await handlers.listBots();
-        await publishBotListResult({
+        if (request.type === "client.bot.list.request") {
+          const bots = await handlers.listBots();
+          await publishBotListResult({
+            requestId: request.requestId,
+            deviceId: request.deviceId,
+            bots,
+          });
+          continue;
+        }
+
+        const snapshot = await handlers.getSessionSnapshot({
+          accountId: request.accountId,
+        });
+        const payload = SessionSnapshotResultPayloadSchema.parse({
+          type: "session.snapshot.result",
+          accountId: snapshot.accountId,
+          activeSessionId: snapshot.activeSessionId,
+          archivedSessions: snapshot.archivedSessions,
+        });
+        await relay.publishEncryptedEvent({
           requestId: request.requestId,
+          eventId: randomUUID(),
           deviceId: request.deviceId,
-          bots,
+          cursor: randomUUID(),
+          eventType: "edge.session.snapshot.result",
+          encryptedPayload: JSON.stringify(payload),
         });
       }
     }
