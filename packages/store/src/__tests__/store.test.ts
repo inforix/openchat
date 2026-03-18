@@ -140,14 +140,16 @@ describe("relay metadata store", () => {
         hostId: "host-1",
         cursor: "cursor-1",
         eventId: "event-1",
-        payload: { text: "first" },
+        requestId: "request-1",
+        eventType: "edge.hello",
       });
       store.appendEventCursorRecord({
         deviceId: "device-1",
         hostId: "host-1",
         cursor: "cursor-2",
         eventId: "event-2",
-        payload: { text: "second" },
+        requestId: "request-2",
+        eventType: "edge.stream.event",
       });
 
       expect(
@@ -160,10 +162,11 @@ describe("relay metadata store", () => {
         expect.objectContaining({
           cursor: "cursor-2",
           eventId: "event-2",
+          requestId: "request-2",
+          eventType: "edge.stream.event",
           expiresAt: new Date(
             Date.parse("2026-03-18T00:00:00.000Z") + RELAY_CURSOR_TTL_MS,
           ).toISOString(),
-          payload: { text: "second" },
         }),
       ]);
 
@@ -173,6 +176,116 @@ describe("relay metadata store", () => {
         store.readEventCursorRecords({
           deviceId: "device-1",
           hostId: "host-1",
+        }),
+      ).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("persists only replay metadata for cursor records", () => {
+    const { store } = createTestStore();
+
+    try {
+      store.registerDevice({
+        deviceId: "device-1",
+        userId: "user-1",
+      });
+      store.registerHost({
+        hostId: "host-1",
+        userId: "user-1",
+      });
+      store.bindDeviceToHost({
+        deviceId: "device-1",
+        hostId: "host-1",
+      });
+
+      store.appendEventCursorRecord({
+        deviceId: "device-1",
+        hostId: "host-1",
+        cursor: "cursor-1",
+        eventId: "event-1",
+        requestId: "request-1",
+        eventType: "edge.stream.event",
+        body: "cleartext transcript content",
+      } as never);
+
+      expect(
+        store.readEventCursorRecords({
+          deviceId: "device-1",
+          hostId: "host-1",
+        }),
+      ).toEqual([
+        {
+          deviceId: "device-1",
+          hostId: "host-1",
+          cursor: "cursor-1",
+          eventId: "event-1",
+          requestId: "request-1",
+          eventType: "edge.stream.event",
+          createdAt: "2026-03-18T00:00:00.000Z",
+          expiresAt: new Date(
+            Date.parse("2026-03-18T00:00:00.000Z") + RELAY_CURSOR_TTL_MS,
+          ).toISOString(),
+        },
+      ]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("does not replay from the start when afterCursor is unknown or expired", () => {
+    const { store, advanceMs } = createTestStore();
+
+    try {
+      store.registerDevice({
+        deviceId: "device-1",
+        userId: "user-1",
+      });
+      store.registerHost({
+        hostId: "host-1",
+        userId: "user-1",
+      });
+      store.bindDeviceToHost({
+        deviceId: "device-1",
+        hostId: "host-1",
+      });
+
+      store.appendEventCursorRecord({
+        deviceId: "device-1",
+        hostId: "host-1",
+        cursor: "cursor-1",
+        eventId: "event-1",
+        requestId: "request-1",
+        eventType: "edge.hello",
+      });
+
+      expect(
+        store.readEventCursorRecords({
+          deviceId: "device-1",
+          hostId: "host-1",
+          afterCursor: "missing-cursor",
+        }),
+      ).toEqual([]);
+
+      advanceMs(RELAY_CURSOR_TTL_MS - 1_000);
+
+      store.appendEventCursorRecord({
+        deviceId: "device-1",
+        hostId: "host-1",
+        cursor: "cursor-2",
+        eventId: "event-2",
+        requestId: "request-2",
+        eventType: "edge.stream.event",
+      });
+
+      advanceMs(1_001);
+
+      expect(
+        store.readEventCursorRecords({
+          deviceId: "device-1",
+          hostId: "host-1",
+          afterCursor: "cursor-1",
         }),
       ).toEqual([]);
     } finally {

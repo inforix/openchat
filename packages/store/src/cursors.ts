@@ -6,7 +6,8 @@ export type EventCursorRecord = {
   hostId: string;
   cursor: string;
   eventId: string;
-  payload: unknown;
+  requestId: string;
+  eventType: string;
   createdAt: string;
   expiresAt: string;
 };
@@ -16,7 +17,8 @@ export type AppendEventCursorRecordInput = {
   hostId: string;
   cursor: string;
   eventId: string;
-  payload: unknown;
+  requestId: string;
+  eventType: string;
 };
 
 export type ReadEventCursorRecordsInput = {
@@ -30,7 +32,8 @@ type EventCursorRow = {
   host_id: string;
   cursor: string;
   event_id: string;
-  payload_json: string;
+  request_id: string;
+  event_type: string;
   created_at: string;
   expires_at: string;
 };
@@ -55,7 +58,8 @@ export function appendEventCursorRecord(
           host_id,
           cursor,
           event_id,
-          payload_json,
+          request_id,
+          event_type,
           created_at,
           expires_at
         )
@@ -64,13 +68,15 @@ export function appendEventCursorRecord(
           @hostId,
           @cursor,
           @eventId,
-          @payloadJson,
+          @requestId,
+          @eventType,
           @createdAt,
           @expiresAt
         )
         ON CONFLICT(device_id, host_id, cursor) DO UPDATE SET
           event_id = excluded.event_id,
-          payload_json = excluded.payload_json,
+          request_id = excluded.request_id,
+          event_type = excluded.event_type,
           created_at = excluded.created_at,
           expires_at = excluded.expires_at
       `,
@@ -80,7 +86,8 @@ export function appendEventCursorRecord(
       hostId: input.hostId,
       cursor: input.cursor,
       eventId: input.eventId,
-      payloadJson: JSON.stringify(input.payload),
+      requestId: input.requestId,
+      eventType: input.eventType,
       createdAt,
       expiresAt,
     });
@@ -100,43 +107,70 @@ export function readEventCursorRecords(
 ) {
   pruneExpiredEventCursorRecords(database, clock);
 
+  if (input.afterCursor) {
+    const anchorRowId = getEventCursorRowId(
+      database,
+      input.deviceId,
+      input.hostId,
+      input.afterCursor,
+    );
+
+    if (anchorRowId === null) {
+      return [];
+    }
+
+    const rows = database
+      .prepare<
+        { deviceId: string; hostId: string; anchorRowId: number },
+        EventCursorRow
+      >(
+        `
+          SELECT
+            device_id,
+            host_id,
+            cursor,
+            event_id,
+            request_id,
+            event_type,
+            created_at,
+            expires_at
+          FROM event_cursors
+          WHERE device_id = @deviceId
+            AND host_id = @hostId
+            AND rowid > @anchorRowId
+          ORDER BY rowid ASC
+        `,
+      )
+      .all({
+        deviceId: input.deviceId,
+        hostId: input.hostId,
+        anchorRowId,
+      });
+
+    return rows.map(mapEventCursorRow);
+  }
+
   const rows = database
-    .prepare<
-      { deviceId: string; hostId: string; afterCursor: string | null },
-      EventCursorRow
-    >(
+    .prepare<{ deviceId: string; hostId: string }, EventCursorRow>(
       `
         SELECT
           device_id,
           host_id,
           cursor,
           event_id,
-          payload_json,
+          request_id,
+          event_type,
           created_at,
           expires_at
         FROM event_cursors
         WHERE device_id = @deviceId
           AND host_id = @hostId
-          AND (
-            @afterCursor IS NULL
-            OR rowid > COALESCE(
-              (
-                SELECT rowid
-                FROM event_cursors
-                WHERE device_id = @deviceId
-                  AND host_id = @hostId
-                  AND cursor = @afterCursor
-              ),
-              0
-            )
-          )
         ORDER BY rowid ASC
       `,
     )
     .all({
       deviceId: input.deviceId,
       hostId: input.hostId,
-      afterCursor: input.afterCursor ?? null,
     });
 
   return rows.map(mapEventCursorRow);
@@ -172,7 +206,8 @@ function getEventCursorRecord(
           host_id,
           cursor,
           event_id,
-          payload_json,
+          request_id,
+          event_type,
           created_at,
           expires_at
         FROM event_cursors
@@ -190,13 +225,42 @@ function getEventCursorRecord(
   return row ? mapEventCursorRow(row) : null;
 }
 
+function getEventCursorRowId(
+  database: RelayStoreDatabase,
+  deviceId: string,
+  hostId: string,
+  cursor: string,
+) {
+  const row = database
+    .prepare<
+      { deviceId: string; hostId: string; cursor: string },
+      { rowid: number }
+    >(
+      `
+        SELECT rowid
+        FROM event_cursors
+        WHERE device_id = @deviceId
+          AND host_id = @hostId
+          AND cursor = @cursor
+      `,
+    )
+    .get({
+      deviceId,
+      hostId,
+      cursor,
+    });
+
+  return row?.rowid ?? null;
+}
+
 function mapEventCursorRow(row: EventCursorRow): EventCursorRecord {
   return {
     deviceId: row.device_id,
     hostId: row.host_id,
     cursor: row.cursor,
     eventId: row.event_id,
-    payload: JSON.parse(row.payload_json),
+    requestId: row.request_id,
+    eventType: row.event_type,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
   };
