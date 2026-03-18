@@ -79,51 +79,79 @@ const toTrustRecord = (
 
 export const createPairingService = (
   config: EdgeConfig,
-): PairingService => ({
-  async createPairingResponse(input): Promise<PairingToken> {
-    const now = config.now();
-    return createPairingToken({
-      hostId: config.hostId,
-      edgePublicKey: config.edgePublicKey,
-      expiresAt: new Date(
-        now.getTime() + (input?.ttlMs ?? DEFAULT_TTL_MS),
-      ).toISOString(),
-      pairingNonce: config.generatePairingNonce(),
-    });
-  },
+): PairingService => {
+  let trustedDeviceMutation: Promise<void> = Promise.resolve();
 
-  async confirmPairing(input): Promise<TrustedDeviceRecord> {
-    const state = await readState(config);
-    const seenPairingNonces = new Set(state.seenPairingNonces);
-    const existingRecord = state.devices.find(
-      (record) => record.deviceId === input.deviceId,
-    );
-    const verified = verifyPairingToken({
-      token: input.token,
-      expectedHostId: config.hostId,
-      expectedEdgeKeyFingerprint: input.confirmedEdgeKeyFingerprint,
-      seenPairingNonces,
-      now: config.now(),
-      trustRecord: toTrustRecord(existingRecord),
+  const withTrustedDeviceMutation = async <T>(
+    action: () => Promise<T>,
+  ): Promise<T> => {
+    const previous = trustedDeviceMutation;
+    let release = () => {};
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    const pairedAt = config.now().toISOString();
-    const trustedRecord: TrustedDeviceRecord = {
-      deviceId: input.deviceId,
-      hostId: verified.hostId,
-      edgeKeyFingerprint: verified.edgeKeyFingerprint,
-      pairedAt,
-    };
-    const devices = state.devices.filter(
-      (record) => record.deviceId !== input.deviceId,
-    );
-    devices.push(trustedRecord);
+    const entry = previous.finally(() => current);
+    trustedDeviceMutation = entry;
 
-    await writeState(config, {
-      version: 1,
-      devices,
-      seenPairingNonces: [...seenPairingNonces],
-    });
+    await previous;
+    try {
+      return await action();
+    } finally {
+      release();
+      if (trustedDeviceMutation === entry) {
+        trustedDeviceMutation = Promise.resolve();
+      }
+    }
+  };
 
-    return trustedRecord;
-  },
-});
+  return {
+    async createPairingResponse(input): Promise<PairingToken> {
+      const now = config.now();
+      return createPairingToken({
+        hostId: config.hostId,
+        edgePublicKey: config.edgePublicKey,
+        expiresAt: new Date(
+          now.getTime() + (input?.ttlMs ?? DEFAULT_TTL_MS),
+        ).toISOString(),
+        pairingNonce: config.generatePairingNonce(),
+      });
+    },
+
+    async confirmPairing(input): Promise<TrustedDeviceRecord> {
+      return withTrustedDeviceMutation(async () => {
+        const state = await readState(config);
+        const seenPairingNonces = new Set(state.seenPairingNonces);
+        const existingRecord = state.devices.find(
+          (record) => record.deviceId === input.deviceId,
+        );
+        const verified = verifyPairingToken({
+          token: input.token,
+          expectedHostId: config.hostId,
+          expectedEdgeKeyFingerprint: input.confirmedEdgeKeyFingerprint,
+          seenPairingNonces,
+          now: config.now(),
+          trustRecord: toTrustRecord(existingRecord),
+        });
+        const pairedAt = config.now().toISOString();
+        const trustedRecord: TrustedDeviceRecord = {
+          deviceId: input.deviceId,
+          hostId: verified.hostId,
+          edgeKeyFingerprint: verified.edgeKeyFingerprint,
+          pairedAt,
+        };
+        const devices = state.devices.filter(
+          (record) => record.deviceId !== input.deviceId,
+        );
+        devices.push(trustedRecord);
+
+        await writeState(config, {
+          version: 1,
+          devices,
+          seenPairingNonces: [...seenPairingNonces],
+        });
+
+        return trustedRecord;
+      });
+    },
+  };
+};

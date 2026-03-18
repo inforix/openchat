@@ -24,17 +24,15 @@ const withMutex = async <T>(
   const current = new Promise<void>((resolve) => {
     release = resolve;
   });
-  locks.set(
-    key,
-    previous.then(() => current),
-  );
+  const entry = previous.then(() => current);
+  locks.set(key, entry);
 
   await previous;
   try {
     return await action();
   } finally {
     release();
-    if (locks.get(key) === current) {
+    if (locks.get(key) === entry) {
       locks.delete(key);
     }
   }

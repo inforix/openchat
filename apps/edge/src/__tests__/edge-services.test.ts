@@ -88,10 +88,13 @@ type EdgeOpenClawAdapter = Pick<
   | "abortMessage"
 > & {
   confirmAccountCreated(input: CreateOpenChatBotInput): Promise<boolean>;
+  hasActiveStream(input: { accountId: string }): Promise<boolean>;
 };
 
 const OPENCHAT_ACCOUNTS_CONFIG_PATH = "channels.openchat.accounts";
 const tempDirs: string[] = [];
+const pendingMicrotasks = async (): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, 0));
 
 class FakeRelay {
   readonly registerCalls: Array<{
@@ -179,11 +182,22 @@ class ConfirmingOpenClawAdapter implements EdgeOpenClawAdapter {
   readonly createRequests: CreateOpenChatBotInput[] = [];
   readonly confirmRequests: CreateOpenChatBotInput[] = [];
   private readonly confirmations = new Map<string, boolean>();
+  private activeStreams = new Set<string>();
+  streamConflictShape: { code: "session_conflict"; activeSessionId: string | null } | null =
+    null;
 
   constructor(private readonly client: OpenClawClient) {}
 
   setAccountConfirmation(accountId: string, confirmed: boolean): void {
     this.confirmations.set(accountId, confirmed);
+  }
+
+  setStreamActive(accountId: string, active: boolean): void {
+    if (active) {
+      this.activeStreams.add(accountId);
+      return;
+    }
+    this.activeStreams.delete(accountId);
   }
 
   async confirmAccountCreated(
@@ -219,6 +233,9 @@ class ConfirmingOpenClawAdapter implements EdgeOpenClawAdapter {
   }
 
   async sendMessage(input: SendMessageInput): Promise<void> {
+    if (this.streamConflictShape) {
+      throw { ...this.streamConflictShape };
+    }
     return this.client.sendMessage(input);
   }
 
@@ -227,6 +244,10 @@ class ConfirmingOpenClawAdapter implements EdgeOpenClawAdapter {
     targetSessionId: string;
   }): Promise<void> {
     return this.client.abortMessage(input);
+  }
+
+  async hasActiveStream(input: { accountId: string }): Promise<boolean> {
+    return this.activeStreams.has(input.accountId);
   }
 }
 
@@ -395,6 +416,48 @@ describe("edge services", () => {
     ).rejects.toThrow(/expired/i);
   });
 
+  it("rejects concurrent replay when two pairing confirmations race on the same token", async () => {
+    const createEdgeMain = await loadCreateEdgeMain();
+    const relay = new FakeRelay();
+    const { adapter, stateDir } = await createOpenClawAdapter();
+    const edge = createEdgeMain({
+      hostId: "host-1",
+      deviceId: "device-1",
+      stateDir,
+      relay,
+      openClaw: adapter,
+      generatePairingNonce: () => "nonce-race",
+    });
+    const token = await edge.createPairingResponse({ ttlMs: 60_000 });
+
+    const firstAttempt = edge.confirmPairing({
+      deviceId: "trusted-device-race-1",
+      token,
+      confirmedEdgeKeyFingerprint: token.edgeKeyFingerprint,
+    });
+    const secondAttempt = edge.confirmPairing({
+      deviceId: "trusted-device-race-2",
+      token,
+      confirmedEdgeKeyFingerprint: token.edgeKeyFingerprint,
+    });
+
+    const results = await Promise.allSettled([firstAttempt, secondAttempt]);
+    const fulfilled = results.filter(
+      (result): result is PromiseFulfilledResult<TrustedDeviceRecord> =>
+        result.status === "fulfilled",
+    );
+    const rejected = results.filter(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(String(rejected[0].reason)).toMatch(/already been used/i);
+    await expect(
+      readFile(join(stateDir, "edge", "trusted-devices.json"), "utf8"),
+    ).resolves.toContain(fulfilled[0].value.deviceId);
+  });
+
   it("lists bots from OpenClaw on demand with fresh reads", async () => {
     const createEdgeMain = await loadCreateEdgeMain();
     const relay = new FakeRelay();
@@ -517,6 +580,7 @@ describe("edge services", () => {
       accountId: "acct-1",
       agentId: "agent-1",
     });
+    adapter.setStreamActive("acct-1", true);
     transport.holdNextSendOpen();
 
     const sendPromise = edge.handleMessage({
@@ -547,11 +611,86 @@ describe("edge services", () => {
       activeSessionId: bot.activeSessionId,
     });
 
+    adapter.setStreamActive("acct-1", false);
     transport.releasePendingSend();
     await expect(sendPromise).resolves.toEqual({
       ok: true,
       activeSessionId: bot.activeSessionId,
       forwarded: true,
+    });
+  });
+
+  it("returns session_busy based on explicit adapter stream state even after send resolves", async () => {
+    const createEdgeMain = await loadCreateEdgeMain();
+    const relay = new FakeRelay();
+    const { adapter, stateDir } = await createOpenClawAdapter();
+    const edge = createEdgeMain({
+      hostId: "host-1",
+      deviceId: "device-1",
+      stateDir,
+      relay,
+      openClaw: adapter,
+    });
+    const bot = await edge.createBot({
+      accountId: "acct-1",
+      agentId: "agent-1",
+    });
+
+    adapter.setStreamActive("acct-1", true);
+    await expect(
+      edge.handleMessage({
+        accountId: "acct-1",
+        targetSessionId: bot.activeSessionId,
+        payload: {
+          kind: "userMessage",
+          text: "send and resolve immediately",
+        },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      activeSessionId: bot.activeSessionId,
+      forwarded: true,
+    });
+
+    await pendingMicrotasks();
+    await expect(
+      edge.handleMessage({
+        accountId: "acct-1",
+        targetSessionId: bot.activeSessionId,
+        payload: {
+          kind: "systemCommand",
+          command: {
+            type: "session.new",
+            expectedActiveSessionId: bot.activeSessionId,
+            commandId: "cmd-busy-explicit",
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "session_busy",
+      activeSessionId: bot.activeSessionId,
+    });
+
+    adapter.setStreamActive("acct-1", false);
+    await expect(
+      edge.handleMessage({
+        accountId: "acct-1",
+        targetSessionId: bot.activeSessionId,
+        payload: {
+          kind: "systemCommand",
+          command: {
+            type: "session.new",
+            expectedActiveSessionId: bot.activeSessionId,
+            commandId: "cmd-busy-explicit-next",
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      activeSessionId: "sess-2",
+      resultingSessionId: "sess-2",
+      forwarded: false,
     });
   });
 
@@ -601,6 +740,97 @@ describe("edge services", () => {
           : null,
     });
     expect(transport.sendCalls).toEqual([]);
+  });
+
+  it("returns session_conflict when session.new is addressed to a stale targetSessionId", async () => {
+    const createEdgeMain = await loadCreateEdgeMain();
+    const relay = new FakeRelay();
+    const { adapter, stateDir } = await createOpenClawAdapter();
+    const edge = createEdgeMain({
+      hostId: "host-1",
+      deviceId: "device-1",
+      stateDir,
+      relay,
+      openClaw: adapter,
+    });
+    const bot = await edge.createBot({
+      accountId: "acct-1",
+      agentId: "agent-1",
+    });
+    const nextSession = await edge.handleMessage({
+      accountId: "acct-1",
+      targetSessionId: bot.activeSessionId,
+      payload: {
+        kind: "systemCommand",
+        command: {
+          type: "session.new",
+          expectedActiveSessionId: bot.activeSessionId,
+          commandId: "cmd-session-new-stale-seed",
+        },
+      },
+    });
+
+    await expect(
+      edge.handleMessage({
+        accountId: "acct-1",
+        targetSessionId: bot.activeSessionId,
+        payload: {
+          kind: "systemCommand",
+          command: {
+            type: "session.new",
+            expectedActiveSessionId:
+              nextSession.ok && nextSession.resultingSessionId
+                ? nextSession.resultingSessionId
+                : null,
+            commandId: "cmd-session-new-stale-target",
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "session_conflict",
+      activeSessionId:
+        nextSession.ok && nextSession.resultingSessionId
+          ? nextSession.resultingSessionId
+          : null,
+    });
+  });
+
+  it("translates structurally-shaped session_conflict errors without relying on class identity", async () => {
+    const createEdgeMain = await loadCreateEdgeMain();
+    const relay = new FakeRelay();
+    const { adapter, stateDir } = await createOpenClawAdapter();
+    const edge = createEdgeMain({
+      hostId: "host-1",
+      deviceId: "device-1",
+      stateDir,
+      relay,
+      openClaw: adapter,
+    });
+    const bot = await edge.createBot({
+      accountId: "acct-1",
+      agentId: "agent-1",
+    });
+
+    adapter.streamConflictShape = {
+      code: "session_conflict",
+      activeSessionId: "sess-foreign",
+    };
+
+    await expect(
+      edge.handleMessage({
+        accountId: "acct-1",
+        targetSessionId: bot.activeSessionId,
+        payload: {
+          kind: "userMessage",
+          text: "plain-object conflict",
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "session_conflict",
+      activeSessionId: "sess-foreign",
+    });
   });
 
   it("returns the original resultingSessionId for a duplicate commandId after edge restart", async () => {

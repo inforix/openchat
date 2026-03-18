@@ -2,10 +2,7 @@ import {
   MessagePayloadSchema,
   type MessagePayload,
 } from "../../../packages/protocol/src/index";
-import {
-  SessionConflictError,
-  type ActiveSession,
-} from "../../../packages/openclaw-client/src/index";
+import { type ActiveSession } from "../../../packages/openclaw-client/src/index";
 
 type SessionCommandInput = {
   accountId: string;
@@ -42,6 +39,7 @@ export type SessionOpenClawAdapter = {
     accountId: string;
     targetSessionId: string;
   }): Promise<void>;
+  hasActiveStream(input: { accountId: string }): Promise<boolean>;
 };
 
 export type SessionService = {
@@ -58,23 +56,38 @@ const withMutex = async <T>(
   const current = new Promise<void>((resolve) => {
     release = resolve;
   });
-  locks.set(
-    key,
-    previous.then(() => current),
-  );
+  const entry = previous.then(() => current);
+  locks.set(key, entry);
 
   await previous;
   try {
     return await action();
   } finally {
     release();
-    if (locks.get(key) === current) {
+    if (locks.get(key) === entry) {
       locks.delete(key);
     }
   }
 };
 
-const toConflictResult = (error: SessionConflictError): SessionSendResult => ({
+const isSessionConflictLike = (
+  error: unknown,
+): error is { code: "session_conflict"; activeSessionId: string | null } => {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const candidate = error as Record<string, unknown>;
+  return (
+    candidate.code === "session_conflict" &&
+    (candidate.activeSessionId === null ||
+      typeof candidate.activeSessionId === "string")
+  );
+};
+
+const toConflictResult = (
+  error: { code: "session_conflict"; activeSessionId: string | null },
+): SessionSendResult => ({
   ok: false,
   code: "session_conflict",
   activeSessionId: error.activeSessionId,
@@ -83,7 +96,6 @@ const toConflictResult = (error: SessionConflictError): SessionSendResult => ({
 export const createSessionService = (
   openClaw: SessionOpenClawAdapter,
 ): SessionService => {
-  const activeStreams = new Set<string>();
   const mutationLocks = new Map<string, Promise<void>>();
 
   return {
@@ -95,13 +107,24 @@ export const createSessionService = (
         payload.command.type === "session.new"
       ) {
         return withMutex(mutationLocks, input.accountId, async () => {
-          if (activeStreams.has(input.accountId)) {
+          if (await openClaw.hasActiveStream({ accountId: input.accountId })) {
             const activeSession = await openClaw.getActiveSession({
               accountId: input.accountId,
             });
             return {
               ok: false,
               code: "session_busy",
+              activeSessionId: activeSession?.sessionId ?? null,
+            };
+          }
+
+          if (input.targetSessionId !== payload.command.expectedActiveSessionId) {
+            const activeSession = await openClaw.getActiveSession({
+              accountId: input.accountId,
+            });
+            return {
+              ok: false,
+              code: "session_conflict",
               activeSessionId: activeSession?.sessionId ?? null,
             };
           }
@@ -120,7 +143,7 @@ export const createSessionService = (
               forwarded: false,
             };
           } catch (error) {
-            if (error instanceof SessionConflictError) {
+            if (isSessionConflictLike(error)) {
               return toConflictResult(error);
             }
             throw error;
@@ -128,7 +151,6 @@ export const createSessionService = (
         });
       }
 
-      activeStreams.add(input.accountId);
       try {
         await openClaw.sendMessage({
           accountId: input.accountId,
@@ -141,12 +163,10 @@ export const createSessionService = (
           forwarded: true,
         };
       } catch (error) {
-        if (error instanceof SessionConflictError) {
+        if (isSessionConflictLike(error)) {
           return toConflictResult(error);
         }
         throw error;
-      } finally {
-        activeStreams.delete(input.accountId);
       }
     },
   };
