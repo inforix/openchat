@@ -39,6 +39,9 @@ importers:
         specifier: ^3.24.2
         version: 3.25.76
     devDependencies:
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       tsx:
         specifier: ^4.19.3
         version: 4.21.0
@@ -55,6 +58,9 @@ importers:
         specifier: ^8.18.1
         version: 8.19.0
     devDependencies:
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       tsx:
         specifier: ^4.19.3
         version: 4.21.0
@@ -95,6 +101,9 @@ importers:
       '@types/react-dom':
         specifier: ^19.0.4
         version: 19.2.3(@types/react@19.2.14)
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       jsdom:
         specifier: ^25.0.1
         version: 25.0.1
@@ -882,6 +891,9 @@ packages:
 
   '@types/react@19.2.14':
     resolution: {integrity: sha512-ilcTH/UniCkMdtexkoCN0bI7pMcJDvmQFPvuPvmEaYA/NSfFTAgdUSLAoVjaRJm7+6PvcM+q1zYOwS4wTYMF9w==}
+
+  '@types/ws@8.18.1':
+    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
   '@vitest/expect@2.1.9':
     resolution: {integrity: sha512-UJCIkTBenHeKT1TTlKMJWy1laZewsRIzYighyYiJKZreqtdxSos/S1t+ktRMQWu2CKqaarrkeszJx1cgC5tGZw==}
@@ -2210,6 +2222,10 @@ snapshots:
   '@types/react@19.2.14':
     dependencies:
       csstype: 3.2.3
+
+  '@types/ws@8.18.1':
+    dependencies:
+      '@types/node': 22.19.15
 
   '@vitest/expect@2.1.9':
     dependencies:
