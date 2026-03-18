@@ -1,1 +1,1 @@
-console.log("OpenChat edge service bootstrap");
+export * from "./main";
