@@ -7,8 +7,8 @@
 现实状态如下：
 
 - `apps/web` 可以单独启动并渲染 UI
-- `apps/relay` 和 `apps/edge` 已有 main/service 组合与测试覆盖
-- `apps/relay` 和 `apps/edge` 还没有真正的 CLI/bootstrap 入口
+- `apps/relay` 已有真实 CLI/bootstrap 入口，会启动 HTTP/WebSocket relay 并初始化 SQLite store
+- `apps/edge` 已有 main/service 组合与测试覆盖，但还没有真正的 CLI/bootstrap 入口
 - Web 的 Playwright e2e 通过浏览器内 `OpenChatE2EHarness` 驱动权威场景，不经过真实 relay/edge 网络链路
 
 ## Prerequisites
@@ -25,7 +25,16 @@ pnpm install
 
 ## Environment Variables
 
-当前没有必须配置的运行时环境变量。
+当前没有必须配置的运行时环境变量，但 `relay` 已支持以下可选 env：
+
+- `OPENCHAT_RELAY_HOST`
+  Relay 监听地址，默认 `127.0.0.1`
+- `OPENCHAT_RELAY_PORT`
+  Relay 监听端口，默认 `3001`；也支持 `0` 让系统分配临时端口
+- `OPENCHAT_RELAY_STATE_DIR`
+  Relay 状态目录，默认 `<cwd>/.openchat-state`
+- `OPENCHAT_RELAY_SQLITE_PATH`
+  Relay SQLite 文件路径，默认 `<cwd>/.openchat-state/relay/relay.sqlite`
 
 补充说明：
 
@@ -58,11 +67,27 @@ NEXT_PUBLIC_OPENCHAT_E2E=1 pnpm --filter @openchat/web exec next dev --hostname 
 pnpm --filter @openchat/relay dev
 ```
 
-当前不会启动一个可用的 HTTP/WebSocket 服务。`src/index.ts` 只导出 `createRelayMain()`，还没有把 `store`、监听端口和进程生命周期接起来。
+现在会启动一个真实的 relay 进程，并输出监听地址与 SQLite 路径。默认监听：
+
+- HTTP: `http://127.0.0.1:3001`
+- WebSocket: `ws://127.0.0.1:3001/relay`
+
+如果你只想直接启动一次而不是 watch：
+
+```bash
+pnpm --filter @openchat/relay start
+```
+
+`src/index.ts` 仍然保留为库导出面；真正的进程入口是 `src/cli.ts`，它会读取 env、创建 store、启动服务并处理 `SIGINT` / `SIGTERM`。
+
+默认状态路径以进程工作目录为基准。通过 `pnpm --filter @openchat/relay start` 启动时，`cwd` 实际是 `apps/relay`，所以默认 SQLite 会落在：
+
+- `apps/relay/.openchat-state/relay/relay.sqlite`
 
 当前 relay 的真实验证方式是：
 
 ```bash
+pnpm --filter @openchat/relay typecheck
 pnpm --filter @openchat/relay vitest run
 ```
 
@@ -130,11 +155,18 @@ Edge 当前会在传入的 `stateDir` 下使用：
 
 ### Relay SQLite
 
-Relay SQLite 文件路径当前没有仓库级默认约定，而是由：
+Relay 运行时默认会把 SQLite 文件放到：
 
-- `createRelayStore({ filename })`
+- `<cwd>/.openchat-state/relay/relay.sqlite`
 
-的调用方显式提供。测试里主要使用 `:memory:`，见 [apps/relay/src/__tests__/relay.test.ts](/Users/wyp/develop/openchat/.worktrees/task-3-crypto/apps/relay/src/__tests__/relay.test.ts)。
+通过 `pnpm --filter @openchat/relay start` 启动时，这里的 `<cwd>` 实际是 `apps/relay`。
+
+如果需要覆盖，可以设置：
+
+- `OPENCHAT_RELAY_STATE_DIR`
+- `OPENCHAT_RELAY_SQLITE_PATH`
+
+测试里仍然主要使用 `:memory:`，见 [apps/relay/src/__tests__/relay.test.ts](/Users/wyp/develop/openchat/.worktrees/task-3-crypto/apps/relay/src/__tests__/relay.test.ts)。
 
 ## Fake OpenClaw Transport in Tests
 
@@ -161,6 +193,6 @@ Relay SQLite 文件路径当前没有仓库级默认约定，而是由：
 
 - 真实 `web -> relay -> edge` 联网收发还没有接好
 - 还没有用户登录、设备凭证持久化、推送、附件
-- 还没有 relay/edge 的可部署进程入口与配置文件约定
+- 现在只有 relay 具备可启动入口；edge 仍缺少真实 OpenClaw transport 接入与可部署入口约定
 - relay/edge 的 `build` 脚本还不是实际产物构建
 - Next dev 会提示 workspace root warning，但当前不影响测试通过

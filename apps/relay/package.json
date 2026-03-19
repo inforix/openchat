@@ -9,7 +9,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch src/cli.ts",
+    "start": "tsx src/cli.ts",
     "build": "echo \"No build yet\"",
     "vitest": "vitest",
     "test": "vitest run",
