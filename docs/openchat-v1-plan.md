@@ -380,6 +380,24 @@ v1 不做：
 - 完整管理台能力
 - bot rename/delete/rebind
 
+## 当前实现状态（2026-03-18）
+
+仓库当前已经落地并验证的部分：
+
+- `packages/protocol`、`packages/crypto`、`packages/store`、`packages/openclaw-client` 均有单测覆盖
+- Web 已实现 host-first bot 导航、pairing 指纹页、bot 创建页、active session、`/new`、归档只读、离线快照
+- Playwright 已覆盖一条浏览器纵向链路：
+  pairing 指纹展示、bot 列表、Host 确认后创建 bot、消息流、`/new`、离线只读、重连刷新、`session_conflict`
+- `activeSessionId` 的 Host 侧真相源已经固化为 `OPENCLAW_STATE_DIR/openchat/account-state.json`
+
+仓库当前还没有落地的部分：
+
+- Web 还没有接入真实 relay/edge 网络 transport
+- Relay / Edge 还没有独立的 CLI 进程入口
+- Relay SQLite 还没有仓库级默认文件路径约定
+- 配对 UI 还没有把“短校验码 / 二维码”真正接到页面，只完成了 `edgeKeyFingerprint` trust-on-first-use 页面
+- `pnpm test` 当前只跑 workspace smoke，不是全量验证入口
+
 ## 测试与验收
 
 ### 链路测试

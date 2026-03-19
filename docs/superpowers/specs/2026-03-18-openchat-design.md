@@ -379,3 +379,20 @@ v1 不做：
 - `/new` 的唯一执行者是 Edge
 - archived session 在 v1 中只读、不可重激活
 - Relay buffer 默认 TTL 为 5 分钟，且只能做 cursor replay
+
+## Implementation Snapshot (2026-03-18)
+
+当前仓库已经按这个设计落地了以下部分：
+
+- 协议、加密、Relay metadata store、OpenClaw host-side state adapter 都已实现并有 Vitest 覆盖
+- Web 侧已经落地 host-first bot roster、pairing fingerprint trust page、bot creation confirmation、active session chat、`/new`、archived session read-only、offline snapshot
+- Playwright e2e 已验证 vertical slice：
+  pairing fingerprint、OpenClaw bot list、Host 确认后显示新 bot、message stream、`/new`、offline read-only、reconnect refresh、`session_conflict`
+
+当前仓库仍然故意留空或尚未接线的部分：
+
+- 真实 `Client -> Relay -> Edge` 网络链路还没有接入 Web 客户端
+- Relay / Edge 目前是可组合的 service/main 模块，不是可部署的守护进程
+- Relay SQLite 路径仍由调用方显式传入 `createRelayStore({ filename })`
+- 配对设计中的“二维码 + 短校验码”尚未落到 Web UI，当前 UI 只展示 `edgeKeyFingerprint`
+- 浏览器 e2e 依赖测试专用 harness；它只用于验证状态机，不代表生产 transport

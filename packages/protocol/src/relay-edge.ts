@@ -4,6 +4,7 @@ import {
   AccountIdSchema,
   ActiveSessionSchema,
   ArchivedSessionSummarySchema,
+  BotAccountSchema,
   CursorSchema,
   DeviceIdSchema,
   EventIdSchema,
@@ -41,7 +42,10 @@ export const EdgeEventTypeSchema = z.enum([
   "edge.stream.event",
   "edge.cursor.commit",
   "edge.bot.create.result",
+  "edge.bot.list.result",
   "edge.session.snapshot",
+  "edge.session.snapshot.result",
+  "edge.session.history.result",
 ]);
 export type EdgeEventType = z.infer<typeof EdgeEventTypeSchema>;
 
@@ -110,6 +114,29 @@ export type EdgeBotCreateResultEvent = z.infer<
   typeof EdgeBotCreateResultEventSchema
 >;
 
+export const EdgeBotListResultEventSchema = RelayVisibleMetadataSchema.extend({
+  eventType: z.literal("edge.bot.list.result"),
+}).strict();
+export type EdgeBotListResultEvent = z.infer<
+  typeof EdgeBotListResultEventSchema
+>;
+
+export const EdgeSessionSnapshotResultEventSchema =
+  RelayVisibleMetadataSchema.extend({
+    eventType: z.literal("edge.session.snapshot.result"),
+  }).strict();
+export type EdgeSessionSnapshotResultEvent = z.infer<
+  typeof EdgeSessionSnapshotResultEventSchema
+>;
+
+export const EdgeSessionHistoryResultEventSchema =
+  RelayVisibleMetadataSchema.extend({
+    eventType: z.literal("edge.session.history.result"),
+  }).strict();
+export type EdgeSessionHistoryResultEvent = z.infer<
+  typeof EdgeSessionHistoryResultEventSchema
+>;
+
 export const EdgeSessionSnapshotEventSchema = RelayVisibleMetadataSchema.extend({
   eventType: z.literal("edge.session.snapshot"),
   accountId: AccountIdSchema,
@@ -138,6 +165,48 @@ export type EdgeSessionSnapshotEvent = z.infer<
   typeof EdgeSessionSnapshotEventSchema
 >;
 
+export const BotListResultPayloadSchema = z
+  .object({
+    type: z.literal("bot.list.result"),
+    bots: z.array(BotAccountSchema),
+  })
+  .strict();
+export type BotListResultPayload = z.infer<typeof BotListResultPayloadSchema>;
+
+export const SessionSnapshotResultPayloadSchema = z
+  .object({
+    type: z.literal("session.snapshot.result"),
+    accountId: AccountIdSchema,
+    activeSessionId: SessionIdSchema.nullable(),
+    archivedSessions: z.array(ArchivedSessionSummarySchema),
+  })
+  .strict();
+export type SessionSnapshotResultPayload = z.infer<
+  typeof SessionSnapshotResultPayloadSchema
+>;
+
+export const SessionHistoryMessageSchema = z
+  .object({
+    id: z.string().min(1),
+    role: z.enum(["user", "assistant", "system"]),
+    text: z.string(),
+  })
+  .strict();
+export type SessionHistoryMessage = z.infer<typeof SessionHistoryMessageSchema>;
+
+export const SessionHistoryResultPayloadSchema = z
+  .object({
+    type: z.literal("session.history.result"),
+    accountId: AccountIdSchema,
+    sessionId: SessionIdSchema,
+    title: z.string().min(1),
+    messages: z.array(SessionHistoryMessageSchema),
+  })
+  .strict();
+export type SessionHistoryResultPayload = z.infer<
+  typeof SessionHistoryResultPayloadSchema
+>;
+
 export const RelayEventEnvelopeSchema = z.union([
   EdgeHelloEventSchema,
   EdgeRegisterHostEventSchema,
@@ -145,6 +214,9 @@ export const RelayEventEnvelopeSchema = z.union([
   EdgeCursorCommitEventSchema,
   EdgeBotCreateResultSuccessEventSchema,
   EdgeBotCreateResultFailureEventSchema,
+  EdgeBotListResultEventSchema,
   EdgeSessionSnapshotEventSchema,
+  EdgeSessionSnapshotResultEventSchema,
+  EdgeSessionHistoryResultEventSchema,
 ]);
 export type RelayEventEnvelope = z.infer<typeof RelayEventEnvelopeSchema>;

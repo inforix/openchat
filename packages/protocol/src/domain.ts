@@ -102,12 +102,14 @@ export type SessionNewCommand = z.infer<typeof SessionNewCommandSchema>;
 export const UserMessageSchema = z
   .object({
     kind: z.literal("userMessage"),
-    text: z.string().min(1),
+    text: z
+      .string()
+      .min(1)
+      .refine((value) => value.trim() !== "/new", {
+        message: "`/new` must be encoded as a systemCommand",
+      }),
   })
-  .strict()
-  .refine((value) => value.text.trim() !== "/new", {
-    message: "`/new` must be encoded as a systemCommand",
-  });
+  .strict();
 
 export const SystemCommandMessageSchema = z
   .object({

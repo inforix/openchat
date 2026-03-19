@@ -6,13 +6,27 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "echo \"No tests yet\"",
+    "vitest": "vitest",
+    "test": "vitest run",
     "lint": "tsc --project tsconfig.json --noEmit",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@openchat/protocol": "workspace:*",
+    "@openchat/ui": "workspace:*",
     "next": "^15.2.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@types/ws": "^8.18.1",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@testing-library/user-event": "^14.6.1",
+    "jsdom": "^25.0.1",
+    "vitest": "^2.1.9",
+    "ws": "^8.18.1"
   }
 }

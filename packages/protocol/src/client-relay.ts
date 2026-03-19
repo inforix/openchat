@@ -3,12 +3,14 @@ import { z } from "zod";
 import {
   AccountIdSchema,
   AgentIdSchema,
+  ArchivedSessionSummarySchema,
   HostIdSchema,
   MessagePayloadSchema,
   RequestIdSchema,
   SessionIdSchema,
   SessionNewCommandSchema,
 } from "./domain";
+import { ProtocolErrorCodeSchema } from "./errors";
 import { StreamEventSchema } from "./relay-edge";
 
 export const BotCreateRequestSchema = z
@@ -34,6 +36,31 @@ export const MessageSendRequestSchema = z
   })
   .strict();
 export type MessageSendRequest = z.infer<typeof MessageSendRequestSchema>;
+
+export const MessageSendResultSuccessSchema = z
+  .object({
+    ok: z.literal(true),
+    activeSessionId: SessionIdSchema,
+    resultingSessionId: SessionIdSchema.optional(),
+    forwarded: z.boolean(),
+    archivedSessions: z.array(ArchivedSessionSummarySchema),
+  })
+  .strict();
+
+export const MessageSendResultFailureSchema = z
+  .object({
+    ok: z.literal(false),
+    code: ProtocolErrorCodeSchema,
+    activeSessionId: SessionIdSchema.nullable(),
+    archivedSessions: z.array(ArchivedSessionSummarySchema),
+  })
+  .strict();
+
+export const MessageSendResultSchema = z.discriminatedUnion("ok", [
+  MessageSendResultSuccessSchema,
+  MessageSendResultFailureSchema,
+]);
+export type MessageSendResult = z.infer<typeof MessageSendResultSchema>;
 
 export { StreamEventSchema };
 export type StreamEvent = z.infer<typeof StreamEventSchema>;

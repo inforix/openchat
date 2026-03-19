@@ -1,1 +1,2 @@
-console.log("OpenChat relay service bootstrap");
+export * from "./main";
+export * from "./server";

@@ -3,17 +3,28 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "echo \"No build yet\"",
-    "test": "echo \"No tests yet\"",
+    "vitest": "vitest",
+    "test": "vitest run",
     "lint": "tsc --project tsconfig.json --noEmit",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@openchat/crypto": "workspace:*",
+    "@openchat/openclaw-client": "workspace:*",
+    "@openchat/protocol": "workspace:*",
+    "ws": "^8.18.1",
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@types/ws": "^8.18.1",
     "tsx": "^4.19.3"
   }
 }
