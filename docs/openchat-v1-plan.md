@@ -61,7 +61,7 @@ OpenChat 的主数据路径固定为：
 客户端主导航固定为：
 
 - 顶层切换 `Host`
-- 每个 `Host` 下展示该主机当前 `openchat accounts` 形成的 bot 列表
+- 每个 `Host` 下展示该主机当前顶层 `bindings` 中 canonical OpenChat 绑定投影出的 bot 列表
 - 点进某个 bot 后直接进入其 `active session`
 - bot 详情页中提供历史会话入口
 
@@ -138,10 +138,10 @@ Edge 只调用 OpenClaw Gateway 的聊天和配置相关能力，不暴露完整
 
 v1 需要的适配能力：
 
-- 读取 `openchat channel` 配置
-- 列出 `openchat accounts`
-- 创建 `openchat account`
-- 维护 `account -> agent` 绑定
+- 读取顶层 `bindings`
+- 列出 canonical OpenChat 绑定
+- 创建 canonical OpenChat 绑定
+- 维护 `account -> agent` 的 1:1 绑定
 - 列出 session
 - 读取 session 历史
 - 发送消息到指定 account 对应的 agent / session
@@ -364,7 +364,7 @@ v1 不做：
 - Web 客户端
 - 用户设备登录
 - 单用户多 Host 绑定
-- 从 OpenClaw 读取 `openchat accounts` 形成 bot 列表
+- 从 OpenClaw 顶层 `bindings` 投影出 bot 列表
 - 在 OpenChat 中创建 bot，并写入 OpenClaw 成功后展示
 - 每个 bot 对应一个 active session
 - `/new` 创建新会话
@@ -404,7 +404,7 @@ v1 不做：
 
 - 单 Host 单 Device 下消息能正常流式返回
 - 单用户多 Host 下消息能被正确路由
-- bot 列表与 OpenClaw 当前 `openchat accounts` 一致
+- bot 列表与 OpenClaw 当前 canonical OpenChat bindings 一致
 - `bot.create` 只有在 OpenClaw 成功后才出现在 UI 中
 - 客户端重连后能按 `cursor` 补齐缺失事件
 - 重复发送同一个 `client_message_id` 不产生重复消息
@@ -433,7 +433,7 @@ v1 不做：
 - Gateway 无需暴露公网端口
 - Relay 不保存明文消息
 - 一个用户可稳定绑定至少两台 Host
-- 一个 Host 下可维护多个 `openchat accounts`，每个都可独立聊天
+- 一个 Host 下可维护多个 canonical OpenChat bindings，每个都可独立聊天
 - `activeSessionId` 从 `OPENCLAW_STATE_DIR/openchat/account-state.json` 恢复
 
 ## 默认假设

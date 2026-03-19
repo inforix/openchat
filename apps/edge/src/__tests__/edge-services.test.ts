@@ -62,7 +62,7 @@ const assertCreateEdgeMainRequiresStreamState = (
 
 void assertCreateEdgeMainRequiresStreamState;
 
-const OPENCHAT_ACCOUNTS_CONFIG_PATH = "channels.openchat.accounts";
+const OPENCHAT_BINDINGS_CONFIG_PATH = "bindings";
 const tempDirs: string[] = [];
 const pendingMicrotasks = async (): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, 0));
@@ -131,7 +131,18 @@ class FakeOpenClawTransport implements OpenClawTransport {
   private resolvePendingSend: (() => void) | null = null;
 
   seedOpenChatAccounts(accounts: Array<{ accountId: string; agentId: string }>) {
-    this.config.set(OPENCHAT_ACCOUNTS_CONFIG_PATH, structuredClone(accounts));
+    this.config.set(
+      OPENCHAT_BINDINGS_CONFIG_PATH,
+      structuredClone(
+        accounts.map((account) => ({
+          agentId: account.agentId,
+          match: {
+            channel: "openchat",
+            accountId: account.accountId,
+          },
+        })),
+      ),
+    );
   }
 
   holdNextSendOpen(): void {

@@ -2,7 +2,12 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 
-import { OPENCHAT_ACCOUNTS_CONFIG_PATH } from "./config";
+import {
+  mergeConfiguredOpenChatAccountsIntoBindings,
+  OPENCHAT_BINDINGS_CONFIG_PATH,
+  parseOpenClawBindings,
+  readConfiguredOpenChatAccountsFromBindings,
+} from "./config";
 import { OpenClawClientError } from "./errors";
 import type {
   MessagePayload,
@@ -28,19 +33,6 @@ export type CreateOpenClawCliTransportInput = {
   createId?: () => string;
 };
 
-type ConfiguredOpenChatAccount = {
-  accountId: string;
-  agentId: string;
-};
-
-type OpenClawBindingRecord = {
-  agentId: string;
-  match: {
-    channel: string;
-    accountId?: string;
-  };
-};
-
 type SessionsResetResult = {
   entry?: {
     sessionId?: string;
@@ -53,40 +45,6 @@ type ChatHistoryResult = {
 };
 
 const DEFAULT_OPENCLAW_BIN = "openclaw";
-
-const isConfiguredAccount = (
-  value: unknown,
-): value is ConfiguredOpenChatAccount => {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.accountId === "string" &&
-    candidate.accountId.length > 0 &&
-    typeof candidate.agentId === "string" &&
-    candidate.agentId.length > 0
-  );
-};
-
-const isBindingRecord = (value: unknown): value is OpenClawBindingRecord => {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const candidate = value as Record<string, unknown>;
-  const match =
-    typeof candidate.match === "object" && candidate.match !== null
-      ? (candidate.match as Record<string, unknown>)
-      : null;
-  return (
-    typeof candidate.agentId === "string" &&
-    !!match &&
-    typeof match.channel === "string" &&
-    (match.accountId === undefined || typeof match.accountId === "string")
-  );
-};
 
 const defaultRunner = (
   openClawBin: string,
@@ -267,20 +225,10 @@ export const createOpenClawCliTransport = (
     requireCommandSuccess(result, `openclaw config set ${path}`);
   };
 
-  const readConfiguredAccounts = async (): Promise<ConfiguredOpenChatAccount[]> => {
-    const value = await configGetJson(OPENCHAT_ACCOUNTS_CONFIG_PATH);
-    if (value === undefined) {
-      return [];
-    }
-
-    if (!Array.isArray(value) || !value.every(isConfiguredAccount)) {
-      throw new OpenClawClientError(
-        `${OPENCHAT_ACCOUNTS_CONFIG_PATH} is not a valid openchat account list`,
-      );
-    }
-
-    return value.map((account) => ({ ...account }));
-  };
+  const readConfiguredAccounts = async () =>
+    readConfiguredOpenChatAccountsFromBindings(
+      await configGetJson(OPENCHAT_BINDINGS_CONFIG_PATH),
+    );
 
   const resolveAgentIdForAccount = async (accountId: string): Promise<string> => {
     const accounts = await readConfiguredAccounts();
@@ -327,40 +275,34 @@ export const createOpenClawCliTransport = (
     },
 
     async agentsBind(inputValue): Promise<void> {
-      const { channel, accountId } = parseOpenChatBinding(inputValue.binding);
-      const existing = await configGetJson("bindings");
-      const bindings =
-        existing === undefined
-          ? []
-          : Array.isArray(existing) && existing.every(isBindingRecord)
-            ? existing.map((binding) => ({
-                agentId: binding.agentId,
-                match: { ...binding.match },
-              }))
-            : (() => {
-                throw new OpenClawClientError(
-                  `bindings is not a valid OpenClaw bindings array`,
-                );
-              })();
-
-      const hasExactBinding = bindings.some(
-        (binding) =>
-          binding.agentId === inputValue.agentId &&
-          binding.match.channel === channel &&
-          binding.match.accountId === accountId,
+      const { accountId } = parseOpenChatBinding(inputValue.binding);
+      const existingValue = await configGetJson(OPENCHAT_BINDINGS_CONFIG_PATH);
+      const existingBindings = parseOpenClawBindings(existingValue);
+      const existingAccounts =
+        readConfiguredOpenChatAccountsFromBindings(existingValue);
+      const existingAccount = existingAccounts.find(
+        (account) => account.accountId === accountId,
       );
-      if (hasExactBinding) {
+      if (existingAccount?.agentId === inputValue.agentId) {
         return;
       }
 
-      bindings.push({
-        agentId: inputValue.agentId,
-        match: {
-          channel,
-          accountId,
-        },
-      });
-      await configSetJson("bindings", bindings);
+      if (existingAccount) {
+        throw new OpenClawClientError(
+          `openchat account ${accountId} is already bound to agent ${existingAccount.agentId}`,
+        );
+      }
+
+      await configSetJson(
+        OPENCHAT_BINDINGS_CONFIG_PATH,
+        mergeConfiguredOpenChatAccountsIntoBindings(existingBindings, [
+          ...existingAccounts,
+          {
+            accountId,
+            agentId: inputValue.agentId,
+          },
+        ]),
+      );
     },
 
     async createSession(inputValue): Promise<{ sessionId: string }> {
@@ -424,4 +366,3 @@ export const createOpenClawCliTransport = (
     },
   };
 };
-

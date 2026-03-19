@@ -659,7 +659,7 @@ git commit -m "docs: add openchat operator and developer guides"
 ## Acceptance Criteria
 
 - The system boots as three processes: web, relay, edge.
-- Bot list is sourced from OpenClaw `openchat accounts`, not relay-owned config.
+- Bot list is sourced from canonical OpenChat bindings inside OpenClaw top-level `bindings`, not relay-owned config.
 - Creating a bot only succeeds when OpenClaw account creation succeeds.
 - Each bot exposes exactly one active session at a time.
 - `/new` creates a new session and archives the previous one.

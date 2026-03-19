@@ -128,8 +128,36 @@ pnpm --filter @openchat/edge start
 
 - 本机必须有可用的 `openclaw` CLI
 - 本机 OpenClaw gateway 必须可达
-- Host 侧 OpenClaw 必须认识 `openchat` channel；否则 bot 配置写入会报 `unknown channel id: openchat`
+- OpenChat bot 列表来自 OpenClaw 顶层 `bindings` 中形如 `{ agentId, match: { channel: "openchat", accountId } }` 的 canonical 绑定
+- 当前实现会保留所有非 OpenChat bindings，不会把 `bindings` 当成 OpenChat 私有配置区
 - 当前 runtime 通过 `chat.history` 只稳定支持 active session transcript；archived transcript 的历史 `sessionId` 读取还没有完全打通
+
+一个最小可识别的 `bindings` 例子：
+
+```json
+[
+  {
+    "agentId": "writer-bot",
+    "match": {
+      "channel": "openchat",
+      "accountId": "writer"
+    }
+  },
+  {
+    "agentId": "discord-bot",
+    "match": {
+      "channel": "discord",
+      "guildId": "123456"
+    }
+  }
+]
+```
+
+排障要点：
+
+- 如果 `bindings` 不是合法数组，Edge 会报 `bindings is not a valid OpenClaw bindings array`
+- 如果同一个 OpenChat `accountId` 同时绑定到多个 `agentId`，Edge 会报 `openchat account <id> is bound to multiple agents`
+- OpenChat 只接收 canonical OpenChat 绑定；带 `peer`、`guildId`、`teamId`、`roles` 的记录不会被当成 OpenChat bot
 
 当前 edge 的真实验证方式是：
 

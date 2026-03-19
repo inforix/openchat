@@ -205,7 +205,7 @@ OpenClaw 是主机侧核心系统，负责：
 
 ### Listing Bots
 
-bot 列表直接来源于 OpenClaw 当前的 `openchat accounts`。
+bot 列表直接来源于 OpenClaw 当前顶层 `bindings` 中的 canonical OpenChat 绑定投影。
 
 OpenChat 每次刷新列表时，应请求目标 Host 的 Edge，再由 Edge 读取 OpenClaw 当前配置。Relay 只负责转发。
 
@@ -215,8 +215,8 @@ OpenChat 可以发起创建 bot，但采用“受控创建”模型：
 
 1. 用户在 OpenChat 中发起创建 bot
 2. 请求经过 Relay 发到目标 Host 的 Edge
-3. Edge 使用受支持的 Host-local CLI/config path 在 OpenClaw 中写入新的 `openchat account`
-4. Edge 使用 account-scoped routing binding 完成 `account -> agent` 的 1:1 绑定
+3. Edge 使用受支持的 Host-local CLI/config path 在 OpenClaw 顶层 `bindings` 中写入新的 canonical OpenChat 绑定
+4. Edge 确保 `accountId -> agentId` 的 1:1 绑定成立，并保留其他非 OpenChat bindings 不变
 5. 只有在 OpenClaw 返回成功后，该 bot 才显示在 OpenChat 中
 
 如果任一步失败：
@@ -226,8 +226,9 @@ OpenChat 可以发起创建 bot，但采用“受控创建”模型：
 
 v1 写入路径固定为：
 
-- 读取/写入 `channels.openchat.accounts` 使用 `openclaw config get|set|unset`
-- 建立 account-scoped agent binding 使用 `openclaw agents bind --bind openchat:<accountId>`
+- 读取/写入顶层 `bindings` 使用 `openclaw config get|set|unset`
+- canonical OpenChat 绑定格式固定为 `{ agentId, match: { channel: "openchat", accountId } }`
+- 写回时必须保留所有非 canonical OpenChat bindings
 - 禁止直接改写 `~/.openclaw/openclaw.json`
 
 ## Session Model

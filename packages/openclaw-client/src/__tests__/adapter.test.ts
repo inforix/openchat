@@ -9,7 +9,7 @@ import {
   type OpenClawTransport,
 } from "../index";
 
-const OPENCHAT_ACCOUNTS_CONFIG_PATH = "channels.openchat.accounts";
+const OPENCHAT_BINDINGS_CONFIG_PATH = "bindings";
 
 class FakeOpenClawTransport implements OpenClawTransport {
   readonly bindings: Array<{ agentId: string; binding: string }> = [];
@@ -40,16 +40,53 @@ class FakeOpenClawTransport implements OpenClawTransport {
   private nextSessionNumber = 1;
   failNextBindWith: Error | null = null;
 
+  seedBindings(bindings: unknown[]): void {
+    this.config.set(
+      OPENCHAT_BINDINGS_CONFIG_PATH,
+      structuredClone(bindings),
+    );
+  }
+
   seedOpenChatAccounts(accounts: Array<{ accountId: string; agentId: string }>) {
-    this.config.set(OPENCHAT_ACCOUNTS_CONFIG_PATH, structuredClone(accounts));
+    this.config.set(
+      OPENCHAT_BINDINGS_CONFIG_PATH,
+      structuredClone(
+        accounts.map((account) => ({
+          agentId: account.agentId,
+          match: {
+            channel: "openchat",
+            accountId: account.accountId,
+          },
+        })),
+      ),
+    );
   }
 
   readOpenChatAccounts(): Array<{ accountId: string; agentId: string }> {
+    const bindings =
+      (this.config.get(OPENCHAT_BINDINGS_CONFIG_PATH) as
+        | Array<{
+            agentId: string;
+            match: { channel: string; accountId?: string };
+          }>
+        | undefined) ?? [];
+
     return structuredClone(
-      (this.config.get(OPENCHAT_ACCOUNTS_CONFIG_PATH) as
-        | Array<{ accountId: string; agentId: string }>
-        | undefined) ?? [],
+      bindings
+        .filter(
+          (binding) =>
+            binding.match.channel === "openchat" &&
+            typeof binding.match.accountId === "string",
+        )
+        .map((binding) => ({
+          accountId: binding.match.accountId as string,
+          agentId: binding.agentId,
+        })),
     );
+  }
+
+  readBindings(): unknown {
+    return structuredClone(this.config.get(OPENCHAT_BINDINGS_CONFIG_PATH));
   }
 
   async configGet(path: string): Promise<unknown> {
@@ -207,11 +244,20 @@ describe("openclaw host adapter", () => {
         activeSessionId: secondSession.sessionId,
       },
     ]);
-    expect(transport.configGetCalls).toContain(OPENCHAT_ACCOUNTS_CONFIG_PATH);
+    expect(transport.configGetCalls).toContain(OPENCHAT_BINDINGS_CONFIG_PATH);
   });
 
   it("creates a new openchat account with a required agentId", async () => {
     const transport = new FakeOpenClawTransport();
+    transport.seedBindings([
+      {
+        agentId: "agent-discord",
+        match: {
+          channel: "discord",
+          guildId: "guild-1",
+        },
+      },
+    ]);
     const stateDir = await createStateDir();
     const client = createClient({ transport, stateDir });
 
@@ -240,8 +286,39 @@ describe("openclaw host adapter", () => {
     ]);
     expect(transport.configSetCalls).toEqual([
       {
-        path: OPENCHAT_ACCOUNTS_CONFIG_PATH,
-        value: [{ accountId: "acct-1", agentId: "agent-1" }],
+        path: OPENCHAT_BINDINGS_CONFIG_PATH,
+        value: [
+          {
+            agentId: "agent-discord",
+            match: {
+              channel: "discord",
+              guildId: "guild-1",
+            },
+          },
+          {
+            agentId: "agent-1",
+            match: {
+              channel: "openchat",
+              accountId: "acct-1",
+            },
+          },
+        ],
+      },
+    ]);
+    expect(transport.readBindings()).toEqual([
+      {
+        agentId: "agent-discord",
+        match: {
+          channel: "discord",
+          guildId: "guild-1",
+        },
+      },
+      {
+        agentId: "agent-1",
+        match: {
+          channel: "openchat",
+          accountId: "acct-1",
+        },
       },
     ]);
   });
@@ -269,7 +346,22 @@ describe("openclaw host adapter", () => {
 
   it("rolls back config if provisioning fails after config mutation so retry can succeed", async () => {
     const transport = new FakeOpenClawTransport();
-    transport.seedOpenChatAccounts([{ accountId: "acct-existing", agentId: "agent-existing" }]);
+    transport.seedBindings([
+      {
+        agentId: "agent-existing",
+        match: {
+          channel: "openchat",
+          accountId: "acct-existing",
+        },
+      },
+      {
+        agentId: "agent-discord",
+        match: {
+          channel: "discord",
+          guildId: "guild-1",
+        },
+      },
+    ]);
     transport.failNextBindWith = new Error("bind failed");
     const stateDir = await createStateDir();
     const client = createClient({ transport, stateDir });
@@ -282,6 +374,22 @@ describe("openclaw host adapter", () => {
     ).rejects.toThrow(/bind failed/i);
     expect(transport.readOpenChatAccounts()).toEqual([
       { accountId: "acct-existing", agentId: "agent-existing" },
+    ]);
+    expect(transport.readBindings()).toEqual([
+      {
+        agentId: "agent-discord",
+        match: {
+          channel: "discord",
+          guildId: "guild-1",
+        },
+      },
+      {
+        agentId: "agent-existing",
+        match: {
+          channel: "openchat",
+          accountId: "acct-existing",
+        },
+      },
     ]);
 
     const bot = await client.createOpenChatBot({
@@ -297,6 +405,29 @@ describe("openclaw host adapter", () => {
     expect(transport.readOpenChatAccounts()).toEqual([
       { accountId: "acct-existing", agentId: "agent-existing" },
       { accountId: "acct-1", agentId: "agent-1" },
+    ]);
+    expect(transport.readBindings()).toEqual([
+      {
+        agentId: "agent-discord",
+        match: {
+          channel: "discord",
+          guildId: "guild-1",
+        },
+      },
+      {
+        agentId: "agent-existing",
+        match: {
+          channel: "openchat",
+          accountId: "acct-existing",
+        },
+      },
+      {
+        agentId: "agent-1",
+        match: {
+          channel: "openchat",
+          accountId: "acct-1",
+        },
+      },
     ]);
   });
 
