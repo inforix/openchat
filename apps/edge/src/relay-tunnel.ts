@@ -141,8 +141,11 @@ export const createRelayTunnel = (
 
     while (!stopped) {
       const requests = await relay.takeClientRequests();
-      if (stopped || requests.length === 0) {
-        continue;
+      if (stopped) {
+        return;
+      }
+      if (requests.length === 0) {
+        return;
       }
 
       for (const request of requests) {

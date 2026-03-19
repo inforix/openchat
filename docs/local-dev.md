@@ -8,7 +8,7 @@
 
 - `apps/web` 可以单独启动并渲染 UI
 - `apps/relay` 已有真实 CLI/bootstrap 入口，会启动 HTTP/WebSocket relay 并初始化 SQLite store
-- `apps/edge` 已有 main/service 组合与测试覆盖，但还没有真正的 CLI/bootstrap 入口
+- `apps/edge` 已有真实 CLI/bootstrap 入口，会连接 relay，并通过本机 `openclaw` CLI / gateway 调用 Host 能力
 - Web 的 Playwright e2e 通过浏览器内 `OpenChatE2EHarness` 驱动权威场景，不经过真实 relay/edge 网络链路
 
 ## Prerequisites
@@ -35,6 +35,18 @@ pnpm install
   Relay 状态目录，默认 `<cwd>/.openchat-state`
 - `OPENCHAT_RELAY_SQLITE_PATH`
   Relay SQLite 文件路径，默认 `<cwd>/.openchat-state/relay/relay.sqlite`
+- `OPENCHAT_EDGE_HOST_ID`
+  Edge 所属 Host ID，必填
+- `OPENCHAT_EDGE_DEVICE_ID`
+  Edge 设备 ID，必填
+- `OPENCHAT_EDGE_RELAY_WS_URL`
+  Relay WebSocket 地址，必填，例如 `ws://127.0.0.1:3001/relay`
+- `OPENCHAT_EDGE_STATE_DIR`
+  Edge 状态目录，默认 `<cwd>/.openchat-state`
+- `OPENCHAT_EDGE_OPENCLAW_BIN`
+  OpenClaw CLI 可执行文件，默认 `openclaw`
+- `OPENCHAT_EDGE_OPENCLAW_PROFILE`
+  可选 OpenClaw profile，例如 `dev`
 
 补充说明：
 
@@ -97,11 +109,32 @@ pnpm --filter @openchat/relay vitest run
 pnpm --filter @openchat/edge dev
 ```
 
-当前也不会启动一个可用的本地 Edge 守护进程。`src/index.ts` 只导出 `createEdgeMain()`，还没有接 shell 参数、OpenClaw Gateway 地址或实际 relay client。
+现在会启动一个真实的本地 Edge 进程。最小示例：
+
+```bash
+OPENCHAT_EDGE_HOST_ID=host-1 \
+OPENCHAT_EDGE_DEVICE_ID=device-1 \
+OPENCHAT_EDGE_RELAY_WS_URL=ws://127.0.0.1:3001/relay \
+pnpm --filter @openchat/edge start
+```
+
+`src/index.ts` 仍然保留为库导出面；真正的进程入口是 `src/cli.ts`，它会读取 env、创建 relay client、创建 OpenClaw CLI-backed transport，并处理 `SIGINT` / `SIGTERM`。
+
+默认状态路径同样以进程工作目录为基准。通过 `pnpm --filter @openchat/edge start` 启动时，`cwd` 实际是 `apps/edge`，所以默认状态目录会落在：
+
+- `apps/edge/.openchat-state`
+
+当前 edge runtime 的前置条件和硬限制：
+
+- 本机必须有可用的 `openclaw` CLI
+- 本机 OpenClaw gateway 必须可达
+- Host 侧 OpenClaw 必须认识 `openchat` channel；否则 bot 配置写入会报 `unknown channel id: openchat`
+- 当前 runtime 通过 `chat.history` 只稳定支持 active session transcript；archived transcript 的历史 `sessionId` 读取还没有完全打通
 
 当前 edge 的真实验证方式是：
 
 ```bash
+pnpm --filter @openchat/edge typecheck
 pnpm --filter @openchat/edge vitest run
 ```
 
@@ -193,6 +226,6 @@ Relay 运行时默认会把 SQLite 文件放到：
 
 - 真实 `web -> relay -> edge` 联网收发还没有接好
 - 还没有用户登录、设备凭证持久化、推送、附件
-- 现在只有 relay 具备可启动入口；edge 仍缺少真实 OpenClaw transport 接入与可部署入口约定
+- relay 与 edge 现在都具备可启动入口，但 edge 仍受 OpenClaw `openchat` channel 支持与 archived transcript 读取缺口限制
 - relay/edge 的 `build` 脚本还不是实际产物构建
 - Next dev 会提示 workspace root warning，但当前不影响测试通过

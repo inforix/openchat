@@ -380,3 +380,8 @@ export type {
   CommandSessionResult,
 } from "./account-state";
 export type { MessagePayload, OpenClawTransport } from "./sessions";
+export {
+  createOpenClawCliTransport,
+  type CreateOpenClawCliTransportInput,
+  type OpenClawCliRunner,
+} from "./cli-transport";
